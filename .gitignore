@@ -1,0 +1,119 @@
+# === Massive data & outputs ===
+datasets/
+checkpoints/
+wandb/
+QAT/
+tmp/
+uploading/
+dataset/
+models/
+
+# Slurm / job outputs
+*.out
+slurm-*.out
+*.err
+*.log
+
+# Env snapshots & caches
+.venv/
+venv/
+env/
+conda-env/
+pip-wheel-metadata/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.cache/
+.cache*/
+*.cache/
+
+# VS Code / IDE
+.vscode/
+.vscode-server/
+.idea/
+*.code-workspace
+
+# OS cruft
+.DS_Store
+
+# Large ML artifacts (even if they appear outside the big dirs)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.h5
+*.tflite
+*.npz
+*.npy
+
+# Archives you might create while moving stuff
+*.tar
+*.tar.*
+*.zip
+*.zst
+*.gz
+*.bz2
+*.xz
+
+# ===== Selective keeps for mixed folders =====
+# setting_environment/: keep only scripts/configs
+setting_environment/**
+!setting_environment/**/*.sh
+!setting_environment/**/*.py
+!setting_environment/**/*.txt
+!setting_environment/**/*.md
+!setting_environment/**/*.yml
+!setting_environment/**/*.yaml
+
+# train_file/: keep only scripts/configs
+train_file/**
+!train_file/**/*.sh
+!train_file/**/*.py
+!train_file/**/*.txt
+!train_file/**/*.md
+!train_file/**/*.json
+!train_file/**/*.cfg
+!train_file/**/*.ini
+PTQ4ViT/.git/
+RepQ-ViT/.git/
+pytorch_25.05.sif
+setting_environment/Miniconda3-latest-Linux-x86_64.sh
+setting_environment/Miniconda3-latest-Linux-aarch64.sh
+
+# === My experiment exclusions ===
+
+# Nested repos
+PDEBench/
+VICON/
+external_repos/
+
+# SAPQ artifacts (VERY important)
+SAPQ/artifacts/
+SAPQ/artifacts_*/
+SAPQ/artifacts_block/
+SAPQ/artifacts_global/
+SAPQ/artifacts_layerwise/
+SAPQ/eval_saved_steps/
+SAPQ/prior_sensitivity_*/
+
+# Outputs
+eval_results/
+logs/
+brecq_artifacts/
+ppq_experiments/
+sapq_experiments/
+zzzz_plot/
+
+# Generated result files
+*_results.json
+*_history.json
+metric_table_with_increase.csv
+metric_table_with_increase.xlsx
+
+# Core dumps
+corecore
+*.pt
+SAPQ/debug_first_epoch_grads_out/
+SAPQ/debug_batch4_5_out/
