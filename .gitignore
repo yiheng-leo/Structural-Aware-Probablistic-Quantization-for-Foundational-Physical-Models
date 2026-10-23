@@ -1,12 +1,12 @@
 # === Massive data & outputs ===
-datasets/
-checkpoints/
-wandb/
-QAT/
-tmp/
-uploading/
-dataset/
-models/
+/datasets/
+/checkpoints/
+/wandb/
+/QAT/
+/tmp/
+/uploading/
+/dataset/
+/models/
 
 # Slurm / job outputs
 *.out
@@ -85,9 +85,9 @@ setting_environment/Miniconda3-latest-Linux-aarch64.sh
 # === My experiment exclusions ===
 
 # Nested repos
-PDEBench/
-VICON/
-external_repos/
+/PDEBench/
+/VICON/
+/external_repos/
 
 # SAPQ artifacts (VERY important)
 SAPQ/artifacts/
@@ -117,3 +117,7 @@ corecore
 *.pt
 SAPQ/debug_first_epoch_grads_out/
 SAPQ/debug_batch4_5_out/
+
+# MySVD-compatible quantization outputs and per-run scratch caches
+quantization_artifacts/
+quantization_evaluation/

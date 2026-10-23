@@ -23,7 +23,7 @@ wandb login
 📦 2. Download All Datasets & Models
 Everything is automated.
 Just run:
-python setting_environment/download.py
+python tools/data/download.py
 This script will:
 ✓ Download datasets
 NS-SVS
