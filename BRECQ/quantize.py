@@ -4,6 +4,7 @@ import copy
 import tempfile
 import torch
 from quantization.common import QuantizationResult, forward_model
+from quantization.progress import progress
 from quantization.layers import _replace, _bits, prepare_method
 from quantization.cache import calibration_cache, record_calibration
 from .quantizers import _initialize_brecq_weight_quantizer
@@ -41,14 +42,16 @@ def _brecq(model, layers, calibration, args, weight_bits, activation_bits, devic
     # Initialize every weight quantizer, including layers outside reconstructed
     # blocks, directly from weights; no old scales/checkpoints are consumed.
     with torch.no_grad():
-        for module in quant_modules.values():
+        for module in progress(quant_modules.values(), desc="BRECQ initialize weight scales", unit="layer"):
             _initialize_brecq_weight_quantizer(module)
     covered = {id(module) for _, block in blocks for module in block.modules() if isinstance(module, QuantModule)}
     blocks.extend((name, module) for name, module in quant_modules.items() if id(module) not in covered)
     reconstruction_batch_size = int(getattr(args, "rec_batchsize", 32))
     qnn.requires_grad_(False)
     cached_batches = 0
-    for name, block in blocks:
+    block_progress = progress(blocks, desc="BRECQ reconstruct blocks", unit="block")
+    for name, block in block_progress:
+        block_progress.set_postfix(block=name, refresh=False)
         qnn.eval()
         with tempfile.TemporaryDirectory(prefix="brecq-block-", dir=directory) as block_directory:
             cached_batches = _reconstruct_brecq_block(
@@ -57,7 +60,7 @@ def _brecq(model, layers, calibration, args, weight_bits, activation_bits, devic
     state = {}
     original_modules = dict(original.named_modules())
     with torch.no_grad():
-        for name, module in quant_modules.items():
+        for name, module in progress(quant_modules.items(), desc="BRECQ materialize weights", unit="layer"):
             quantizer = module.weight_quantizer
             if hasattr(quantizer, "soft_targets"):
                 quantizer.soft_targets = False

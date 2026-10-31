@@ -183,6 +183,7 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     from .artifacts import save_quantized_artifact
     from .calibration import build_calibration_loader
     from .common import resolve_device
+    from .progress import progress_write
 
     args = validate_args(args)
     device = resolve_device(args.DEV)
@@ -199,6 +200,7 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     needs_calibration = args.method not in {"fp", "uniform", "dynamic"} and not (
         args.method == "static" and args.activation_bits == 32)
     if calibration_loader is None and needs_calibration:
+        progress_write("Preparing calibration dataset...")
         _, calibration_loader, calibration_metadata = build_calibration_loader(args)
     elif calibration_loader is not None and calibration_metadata is None:
         raise ValueError("Injected calibration_loader requires calibration_metadata")
@@ -207,6 +209,7 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
                                 "num_trajectories": 0, "num_samples": 0,
                                 "reason": "This method/configuration does not consume offline calibration data."}
     if model is None:
+        progress_write(f"Loading full-precision model: {args.model_path}")
         model = _load_model(args.model_path, device)
     model.to(device).eval()
     for parameter in model.parameters():

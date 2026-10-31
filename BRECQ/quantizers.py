@@ -9,6 +9,7 @@ from typing import Union
 import torch
 from torch import nn
 from torch.nn import functional as F
+from quantization.progress import progress
 
 class StraightThrough(nn.Module):
     def __init__(self, channel_num: int = 1):
@@ -90,7 +91,8 @@ class UniformAffineQuantizer(nn.Module):
             delta = x_max.clone()
             zero_point = x_max.clone()
             # determine the scale and zero point channel-by-channel
-            for c in range(n_channels):
+            for c in progress(range(n_channels), desc="BRECQ scale-search channels",
+                              unit="channel", leave=False, delay=0.5):
                 delta[c], zero_point[c] = self.init_quantization_scale(x_clone[c], channel_wise=False)
             if len(x.shape) == 4:
                 delta = delta.view(-1, 1, 1, 1)
@@ -122,7 +124,8 @@ class UniformAffineQuantizer(nn.Module):
                 x_max = x.max()
                 x_min = x.min()
                 best_score = 1e+10
-                for i in range(80):
+                for i in progress(range(80), desc="BRECQ range candidates",
+                                  unit="candidate", leave=False, delay=0.5):
                     new_max = x_max * (1.0 - (i * 0.01))
                     new_min = x_min * (1.0 - (i * 0.01))
                     x_q = self.quantize(x, new_max, new_min)
@@ -321,7 +324,8 @@ def _initialize_brecq_weight_quantizer(module):
         quantizer(weight)
         return
     scales, zeros = [], []
-    for index, row in enumerate(weight):
+    for index, row in enumerate(progress(weight, desc="BRECQ initialize channels",
+                                         unit="channel", leave=False, delay=0.5)):
         if constant[index]:
             value = flattened[index, 0]
             # A one-step representation preserves every constant channel,

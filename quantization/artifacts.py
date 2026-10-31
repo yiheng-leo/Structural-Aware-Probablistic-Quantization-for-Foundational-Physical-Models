@@ -12,6 +12,7 @@ from torch import nn
 
 from .common import QuantizationResult
 from . import compat
+from .progress import progress
 
 
 def _json_default(value):
@@ -24,11 +25,14 @@ def _json_default(value):
     raise TypeError(f"Cannot serialize {type(value).__name__} into artifact metadata")
 
 
-def _sha256(path):
+def _sha256(path, *, show_progress=False):
     digest = hashlib.sha256()
-    with open(path, "rb") as stream:
+    with open(path, "rb") as stream, progress(
+            total=os.path.getsize(path), desc="Checksum saved model", unit="B",
+            unit_scale=True, unit_divisor=1024, enabled=show_progress) as checksum:
         for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
+            checksum.update(len(chunk))
     return digest.hexdigest()
 
 
@@ -57,18 +61,25 @@ def save_quantized_artifact(result: QuantizationResult, path, metadata, *, overw
     model_file = path / "compressed_model.pt"
     if model_file.exists() and not overwrite:
         raise FileExistsError(f"Artifact already exists: {model_file}; use a new --save_path or --overwrite.")
-    result.model.eval().cpu()
-    _atomic_save(result.model, model_file)
-    _atomic_save(result.state, path / "quantization_state.pt")
-    combined = {
-        **metadata,
-        "schema_version": 1,
-        "artifact_type": "poseidon_quantization",
-        "model_file": model_file.name,
-        "model_sha256": _sha256(model_file),
-        "quantization": result.metadata,
-    }
-    _atomic_save(combined, path / "metadata.json", json_file=True)
+    with progress(total=3, desc="Save quantization artifact", unit="file") as files:
+        files.set_postfix(file=model_file.name, refresh=False)
+        result.model.eval().cpu()
+        _atomic_save(result.model, model_file)
+        files.update()
+        files.set_postfix(file="quantization_state.pt", refresh=False)
+        _atomic_save(result.state, path / "quantization_state.pt")
+        files.update()
+        combined = {
+            **metadata,
+            "schema_version": 1,
+            "artifact_type": "poseidon_quantization",
+            "model_file": model_file.name,
+            "model_sha256": _sha256(model_file, show_progress=True),
+            "quantization": result.metadata,
+        }
+        files.set_postfix(file="metadata.json", refresh=False)
+        _atomic_save(combined, path / "metadata.json", json_file=True)
+        files.update()
     return combined
 
 

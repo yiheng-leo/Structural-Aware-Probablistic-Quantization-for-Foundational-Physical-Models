@@ -2,6 +2,7 @@
 import torch
 import torch.nn.functional as F
 from quantization.common import forward_model
+from quantization.progress import progress
 from quantization.probabilistic import (
     _Unit, _capture_unit, _cpu, _first_tensor, _load, _reference_hooks,
     _requires_input_grad,
@@ -33,7 +34,7 @@ def _reference_prefix(model, unit, layers):
 def _cache_unit(model, unit, layers, prefix_layers, reference_steps, paths, directory, device, *, block):
     """Keep only one unit's IO; block inputs use a quantized prefix (asym=True)."""
     result = []
-    for index, path in enumerate(paths):
+    for index, path in enumerate(progress(paths, desc=f"Cache unit IO/Fisher: {unit.name}", leave=False)):
         record = _load(path)
         captured = _capture_unit(model, unit, record["batch"], device)
         if block:

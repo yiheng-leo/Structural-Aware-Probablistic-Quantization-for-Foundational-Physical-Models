@@ -2,6 +2,7 @@
 import torch
 import torch.nn.functional as F
 from quantization.common import forward_model
+from quantization.progress import progress
 from quantization.probabilistic import (
     _EPS, _first_tensor, _load, _reference_hooks, _requires_input_grad,
 )
@@ -56,7 +57,7 @@ def _channel_sensitivity(grad):
 def _sensitivity(model, units, layers, reference_steps, paths, device, args, constants):
     """One backward pass per batch captures every block, keeping only channel sums."""
     totals, counts = {}, {}
-    for path in paths:
+    for path in progress(paths, desc=f"SAPQ {args.sensitivity} sensitivity"):
         record = _load(path)
         captured, handles = {}, []
         try:

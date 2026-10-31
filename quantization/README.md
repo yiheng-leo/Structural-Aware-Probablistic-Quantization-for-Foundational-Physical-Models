@@ -108,6 +108,21 @@ loss reduction 和先验缩放，不把它们伪装成仅改变训练粒度的�
 Sobolev 敏感度保留历史实现的 dataset `std` 广播约定，并写入 metadata；本次不静默改动
 历史方法的物理损失定义。评估侧则按物理通道恢复单位。
 
+## 量化进度
+
+所有正式入口自动显示 tqdm 进度，无需额外参数。阶段包括校准数据／FP 输出缓存、
+激活范围、权重范围、SAPQ 敏感度、PPQ/SAPQ 的层或块、epoch、batch 和 MC 采样，
+以及 BRECQ 的范围搜索／AdaRound 重构、PTQ4ViT 的梯度缓存／区间搜索和各方法权重导出。
+PPQ/SAPQ 的 batch 进度显示 likelihood、prior、总损失和学习率，每个 epoch 保留平均损失及位宽摘要。
+保存阶段按文件计数，模型 SHA-256 校验按字节计数；没有已知长度的迭代器显示完成数量和速率。
+
+进度条写入 stderr，摘要和原有日志写入 stdout。支持终端和重定向的 Slurm 日志，刷新默认限制为每秒一次；
+短暂的 MC／候选搜索内层循环延迟显示。需要关闭进度条时设置环境变量，例如：
+
+```bash
+TQDM_DISABLE=1 python -u -m SAPQ.sapq --config configs/sapq/default.json --model_path ... --data_path ...
+```
+
 ## 保存格式与评估口径
 
 每个输出目录包含：

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import torch
 from .common import forward_model
+from .progress import progress
 
 @torch.no_grad()
 def activation_ranges(model, layers, calibration, device):
@@ -19,7 +20,7 @@ def activation_ranges(model, layers, calibration, device):
             ranges[name] = (low, high)
         handles.append(layer.register_forward_pre_hook(collect))
     try:
-        for batch in calibration:
+        for batch in progress(calibration, desc="Collect activation ranges"):
             forward_model(model, batch, device)
     finally:
         for handle in handles:

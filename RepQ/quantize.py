@@ -8,6 +8,7 @@ import copy
 import torch
 from torch import nn
 from quantization.common import QuantizationResult
+from quantization.progress import progress
 from quantization.layers import QuantizedLinear, _replace, _bits, prepare_method
 from quantization.cache import calibration_cache, record_calibration
 from quantization.observers import activation_ranges as _activation_ranges
@@ -38,7 +39,7 @@ def _repq(model, layers, calibration, weight_bits, activation_bits, device):
         raise ValueError("RepQ scale reparameterization requires activation_bits < 32; use uniform for weight-only quantization")
     ranges = _activation_ranges(model, layers, calibration, device)
     state = {}
-    for name, layer in layers.items():
+    for name, layer in progress(layers.items(), desc="RepQ reparameterize layers", unit="layer"):
         low, high = ranges[name]
         # Full-calibration min/max replaces first-batch percentile initialization
         # in the old script, so every supplied sample contributes to the scales.

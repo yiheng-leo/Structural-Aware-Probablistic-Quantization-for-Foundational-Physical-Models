@@ -2,6 +2,7 @@
 from __future__ import annotations
 import tempfile
 from quantization.common import QuantizationResult
+from quantization.progress import progress
 from quantization.layers import QuantizedLinear, _replace, prepare_method
 from quantization.cache import calibration_cache, record_calibration
 from .hessian import _cache_ptq_layer
@@ -15,7 +16,9 @@ def _ptq4vit(model, layers, calibration, weight_bits, activation_bits, device, d
     state, replacements, twin_layers = {}, {}, []
     # Collect and optimize against the unchanged FP network (parallel PTQ),
     # then apply all replacements together.
-    for name, layer in layers.items():
+    layer_progress = progress(layers.items(), desc="PTQ4ViT quantize layers", unit="layer")
+    for name, layer in layer_progress:
+        layer_progress.set_postfix(layer=name, refresh=False)
         with tempfile.TemporaryDirectory(prefix="ptq-layer-", dir=directory) as layer_directory:
             paths, twin = _cache_ptq_layer(model, name, layer, calibration, layer_directory, device)
             ws, activation_scale, negative_scale, energy = _ptq_search(
@@ -29,7 +32,7 @@ def _ptq4vit(model, layers, calibration, weight_bits, activation_bits, device, d
         state[name] = {"weight_scale": ws.cpu(), "activation_scale": activation_scale.cpu(),
                        "negative_activation_scale": negative_scale.cpu(), "twin_uniform": twin,
                        "calibration_gradient_energy": energy}
-    for name, replacement in replacements.items():
+    for name, replacement in progress(replacements.items(), desc="PTQ4ViT materialize layers", unit="layer"):
         model = _replace(model, name, replacement)
     return model, state, {"search_rounds": rounds, "candidate_intervals": candidates,
                           "twin_uniform_layers": twin_layers,

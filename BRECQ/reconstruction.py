@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from .quantizers import QuantModule, BaseQuantBlock, AdaRoundQuantizer, lp_loss
 from quantization.common import forward_model
+from quantization.progress import progress, progress_write
 
 class StopForwardException(Exception):
     """
@@ -220,7 +221,7 @@ class PoseidonLossFunction:
         total_loss = rec_loss + round_loss
 
         if self.count % 500 == 0:
-            print(
+            progress_write(
                 "Total loss:\t{:.3f} (rec:{:.3f}, round:{:.3f})\tb={:.2f}\tcount={}".format(
                     float(total_loss),
                     float(rec_loss),
@@ -320,7 +321,11 @@ def _reconstruct_brecq_block(qnn, block, calibration, iterations, batch_size, di
     get_io = PoseidonGetLayerInpOut(qnn, block, torch.device(device), asym=True, act_quant=False)
     count = 0
     total_samples = 0
-    for count, batch in enumerate(_brecq_calibration_batches(calibration, batch_size), start=1):
+    cache_total = ((calibration.samples + batch_size - 1) // batch_size
+                   if hasattr(calibration, "samples") else None)
+    batches = progress(_brecq_calibration_batches(calibration, batch_size),
+                       total=cache_total, desc="BRECQ cache block IO", leave=False)
+    for count, batch in enumerate(batches, start=1):
         total_samples += int(batch["pixel_values"].shape[0])
         inputs, target = get_io(batch)
         if inputs is None or target is None:
@@ -332,7 +337,9 @@ def _reconstruct_brecq_block(qnn, block, calibration, iterations, batch_size, di
         get_io.data_saver.output_store = None
     if not count:
         raise ValueError("BRECQ calibration loader is empty")
-    for _ in range(iterations):
+    reconstruction = progress(range(iterations), desc="BRECQ AdaRound reconstruction",
+                              unit="iteration", leave=False)
+    for iteration in reconstruction:
         # Draw a sample uniformly, then reconstruct its stored batch. Batch
         # selection is proportional to batch size; averaging its loss gives
         # equal expected weight to every sample, including the final partial
@@ -343,8 +350,11 @@ def _reconstruct_brecq_block(qnn, block, calibration, iterations, batch_size, di
         target = record["target"].to(device)
         optimizer.zero_grad(set_to_none=True)
         output = get_reconstruction_output(block(*inputs))
-        loss_function(output, target).backward()
+        loss = loss_function(output, target)
+        loss.backward()
         optimizer.step()
+        if iteration == 0 or (iteration + 1) % 100 == 0 or iteration + 1 == iterations:
+            reconstruction.set_postfix(loss=float(loss.detach()), refresh=False)
     for module in block.modules():
         if isinstance(module, QuantModule):
             module.weight_quantizer.soft_targets = False

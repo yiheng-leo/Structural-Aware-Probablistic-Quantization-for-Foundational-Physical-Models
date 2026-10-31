@@ -14,6 +14,7 @@ from quantization.probabilistic import (
 )
 from quantization.probabilistic import _cache_layer
 from .loss import backward_likelihood, prior as compute_prior
+from quantization.progress import progress, progress_write
 
 
 def _optimize(model, layers, steps, ranges, paths, args, device,
@@ -22,12 +23,16 @@ def _optimize(model, layers, steps, ranges, paths, args, device,
     local_steps = {name: steps[name] for name in local_layers}
     optimizer = torch.optim.Adam(list(local_steps.values()), lr=args.learning_rate)
     history = []
-    for epoch in range(1, args.epochs + 1):
+    unit_name = unit.name if unit is not None else "network"
+    for epoch in progress(range(1, args.epochs + 1),
+                          desc=f"{args.method} optimize: {unit_name}", unit="epoch"):
         lr = get_lr_for_epoch(epoch, args.learning_rate, args.epochs)
         for group in optimizer.param_groups:
             group["lr"] = lr
         totals = {"likelihood": 0.0, "prior": 0.0, "total": 0.0}
-        for path in paths:
+        batches = progress(paths, desc=f"{args.method} epoch {epoch}/{args.epochs}",
+                           leave=False)
+        for path in batches:
             record = _load(path)
             target = record["clean" if unit is None else "target"].to(device)
             if unit is None:
@@ -57,12 +62,14 @@ def _optimize(model, layers, steps, ranges, paths, args, device,
             totals["likelihood"] += likelihood
             totals["prior"] += float(prior.detach())
             totals["total"] += likelihood + float(prior.detach())
+            batches.set_postfix(likelihood=likelihood, prior=float(prior.detach()),
+                                loss=likelihood + float(prior.detach()), lr=lr, refresh=False)
         history.append({"unit": unit.name if unit is not None else "network",
                         "epoch": epoch, "learning_rate": lr, "num_batches": len(paths),
                         "avg_bits": _average_bits(steps, ranges, layers),
                         **{key: value / len(paths) for key, value in totals.items()}})
-        print(f"[{args.method}] {history[-1]['unit']} epoch {epoch}/{args.epochs} "
-              f"loss={history[-1]['total']:.6g} bits={history[-1]['avg_bits']:.4f}", flush=True)
+        progress_write(f"[{args.method}] {history[-1]['unit']} epoch {epoch}/{args.epochs} "
+                       f"loss={history[-1]['total']:.6g} bits={history[-1]['avg_bits']:.4f}")
     return history
 
 
@@ -102,14 +109,14 @@ def quantize(model, calibration_loader, args, device, work_dir):
                 history = _optimize(model, layers, steps, ranges, paths, args, device)
             else:
                 units = [_Unit(name, module, {name: module}) for name, module in layers.items()]
-                for unit in units:
+                for unit in progress(units, desc="PPQ reconstruction layers", unit="layer"):
                     with _scratch_directory(scratch, "unit-", keep) as unit_dir:
                         unit_paths = _cache_layer(model, unit, paths, Path(unit_dir), device)
                         history.extend(_optimize(model, layers, steps, ranges,
                                                  unit_paths, args, device, unit=unit))
             avg_bits = _average_bits(steps, ranges, layers)
             with torch.no_grad():
-                for name, module in layers.items():
+                for name, module in progress(layers.items(), desc="PPQ materialize weights", unit="layer"):
                     scale = steps[name].to(module.weight.dtype).view(-1, 1)
                     module.weight.copy_(torch.round(module.weight / scale) * scale)
             state = {"steps": _cpu(steps), "initial_steps": initial_steps, "ranges": _cpu(ranges),

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import torch
 from quantization.common import forward_model
+from quantization.progress import progress
 
 def _cache_ptq_layer(model, name, layer, calibration, directory, device):
     """Cache all layer IO and regression-loss gradients, a batch at a time."""
@@ -26,7 +27,7 @@ def _cache_ptq_layer(model, name, layer, calibration, directory, device):
     original_requires_grad = {parameter: parameter.requires_grad for parameter in model.parameters()}
     model.requires_grad_(True)
     try:
-        for index, batch in enumerate(calibration):
+        for index, batch in enumerate(progress(calibration, desc=f"PTQ4ViT IO/gradients: {name}", leave=False)):
             if not isinstance(batch, dict) or "labels" not in batch:
                 raise ValueError("PTQ4ViT's regression Hessian proxy requires calibration labels")
             model.zero_grad(set_to_none=True)

@@ -13,6 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from quantization.common import forward_model, move_to_device, output_tensor
+from quantization.progress import progress
 
 _EPS = 1e-8
 
@@ -179,7 +180,7 @@ def _freeze_calibration(model, loader, directory, device):
     """Consume the loader once, retaining every batch including its partial tail."""
     paths, samples = [], 0
     with torch.no_grad():
-        for index, batch in enumerate(loader):
+        for index, batch in enumerate(progress(loader, desc="Cache FP calibration outputs")):
             batch = _cpu(_inputs(batch))
             count = _num_samples(batch)
             if count == 0:
@@ -201,7 +202,8 @@ def _weight_ranges(layers, percentile):
     z = math.sqrt(2.0) * torch.special.erfinv(
         torch.tensor(1.0 - 2.0 * percentile, dtype=torch.float64)).item()
     return {name: {"weight_ranges": (2.0 * z * layer.weight.detach().float().std(
-        dim=1, unbiased=False)).clamp_min(_EPS)} for name, layer in layers.items()}
+        dim=1, unbiased=False)).clamp_min(_EPS)}
+        for name, layer in progress(layers.items(), desc="Estimate channel weight ranges", unit="layer")}
 
 
 @dataclass
@@ -253,7 +255,7 @@ def _reference_quantizers(model, bits):
     layers = {name: mod for name, mod in modules.items() if isinstance(mod, (nn.Linear, nn.Conv2d))
               and not any(name == skip or name.startswith(skip + ".") for skip in excluded)}
     quantizers = {}
-    for name, layer in layers.items():
+    for name, layer in progress(layers.items(), desc="Initialize reference quantizers", unit="layer"):
         weight = layer.weight.detach()
         lower, upper = min(weight.min().item(), 0.0), max(weight.max().item(), 0.0)
         delta = max((upper - lower) / (2 ** bits - 1), _EPS)
@@ -350,7 +352,7 @@ def _backward_likelihood(forward, target, args, device, *, marginal, fisher=None
     seeds = torch.randint(0, 2 ** 31 - 1, (args.mc_samples,)).tolist()
     if not marginal:
         loss_value = 0.0
-        for seed in seeds:
+        for seed in progress(seeds, desc="MC likelihood", unit="sample", leave=False, delay=0.5):
             with _seed(seed, device):
                 loss = loss_scale * _energy(forward(), target, args.eta).mean() / args.mc_samples
             loss.backward()
@@ -358,14 +360,14 @@ def _backward_likelihood(forward, target, args, device, *, marginal, fisher=None
         return loss_value
     scores = []
     with torch.no_grad():
-        for seed in seeds:
+        for seed in progress(seeds, desc="MC likelihood forward", unit="sample", leave=False, delay=0.5):
             with _seed(seed, device):
                 scores.append(-_energy(forward(), target, args.eta, fisher,
                                        output_sum=output_sum))
         scores = torch.stack(scores)
         probabilities = scores.softmax(dim=0)
         loss_value = -loss_scale * (scores.logsumexp(dim=0) - math.log(args.mc_samples)).sum().item()
-    for index, seed in enumerate(seeds):
+    for index, seed in enumerate(progress(seeds, desc="MC likelihood backward", unit="sample", leave=False, delay=0.5)):
         with _seed(seed, device):
             energy = _energy(forward(), target, args.eta, fisher,
                              output_sum=output_sum)
@@ -402,7 +404,7 @@ def _capture_unit(model, unit, batch, device, *, stop=True):
 def _cache_layer(model, unit, paths, directory, device):
     """Persist one layer's clean inputs/output, preserving calibration order."""
     result = []
-    for index, path in enumerate(paths):
+    for index, path in enumerate(progress(paths, desc=f"Cache layer IO: {unit.name}", leave=False)):
         record = _load(path)
         captured = _capture_unit(model, unit, record["batch"], device)
         local_path = directory / f"unit_{index:06d}.pt"

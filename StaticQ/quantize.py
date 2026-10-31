@@ -2,6 +2,7 @@
 from __future__ import annotations
 import torch
 from quantization.common import QuantizationResult
+from quantization.progress import progress
 from quantization.layers import QuantizedLinear, _replace, _bits, _symmetric_weight, prepare_method
 from quantization.cache import calibration_cache, record_calibration
 from quantization.observers import activation_ranges
@@ -13,7 +14,7 @@ def quantize(model, calibration_loader, args, device, work_dir):
     with calibration_cache(calibration_loader, work_dir, required=activation_bits < 32) as (calibration, directory):
         record_calibration(metadata, calibration)
         ranges = activation_ranges(model, layers, calibration, device) if activation_bits < 32 else {}
-        for name, layer in layers.items():
+        for name, layer in progress(layers.items(), desc="StaticQ quantize layers", unit="layer"):
             weight, weight_scale = _symmetric_weight(layer.weight, weight_bits)
             mode, scale = "none", None
             if activation_bits < 32:

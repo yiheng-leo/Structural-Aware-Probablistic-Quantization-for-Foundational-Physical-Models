@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import torch
 from .common import move_to_device
+from .progress import progress
 
 class CalibrationCache:
     """A fresh disk snapshot of every supplied calibration batch, never an old cache."""
@@ -14,7 +15,7 @@ class CalibrationCache:
         self.samples = 0
         if loader is None:
             raise ValueError("This method requires a nonempty calibration loader")
-        for index, batch in enumerate(loader):
+        for index, batch in enumerate(progress(loader, desc="Cache calibration")):
             batch = move_to_device(batch, "cpu")
             value = batch if torch.is_tensor(batch) else batch.get("pixel_values")
             if not torch.is_tensor(value) or value.ndim == 0:
@@ -29,6 +30,9 @@ class CalibrationCache:
     def __iter__(self):
         for path in self.paths:
             yield torch.load(path, map_location="cpu", weights_only=False)
+
+    def __len__(self):
+        return len(self.paths)
 
 
 @contextmanager
