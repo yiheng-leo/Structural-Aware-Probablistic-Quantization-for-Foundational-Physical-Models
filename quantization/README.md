@@ -56,21 +56,29 @@ python -m SAPQ.sapq --variant global \
   --save_path quantization_artifacts/NS-PwC/sapq
 ```
 
-独立评估保存的模型（0→15，三次自回归；不重新量化）：
+独立评估保存的模型（默认对齐 SAFE-SVD-v0；不重新量化）：
 
 ```bash
 python -m evaluation.evaluate \
   --model_path quantization_artifacts/NS-PwC/sapq \
+  --checkpoint /path/to/poseidon-checkpoint \
   --dataset fluids.incompressible.PiecewiseConstants \
   --data_path /path/to/down_streams \
-  --split test --initial_time 0 --final_time 15 --ar_steps 3 \
-  --batch_size 16 --DEV cuda \
+  --final_time 20 --batch_size 256 --physics_batch_size 10 --DEV cuda \
   --output_path quantization_evaluation/NS-PwC/sapq.json
 ```
 
-默认评估完整 test split；`--num_trajectories` 可显式选择其确定性前缀并记录协议。
-自回归只把模型预测作为下一步输入，固定/掩码通道从已知输入恢复；不会把未来标签喂给模型。
-指标报告终点的按样本平均值，末尾不足一批的样本不会获得额外权重。
+默认使用 `--protocol safe-svd`：完整 test split 的全部 `t1 <= t2` 时间对，
+每对独立前向；沿用 ScOT 的 labels/pixel_mask 约定及模型 config 定义的 base_loss。
+`--num_trajectories` 默认 64，按 SAFE-SVD 传给数据集构造器，**不截断 test split**。
+物理指标按大小为 10 的批次等权平均，末尾不足一批也占一份权重；比较时必须固定此值。
+`--checkpoint` 可选，提供时先评估原模型，并输出压缩模型相对原模型的百分比变化。
+省略时只评估保存的模型；`--eval_obj oncomp` 则必须提供原模型，以其输出为 fidelity 标签。
+Wave-Gaussians 使用 `--final_time 15`。指标及方法差异见 [评估对齐说明](../docs/poseidon_evaluation.md)。
+
+原固定终点评估仍可通过 `--protocol endpoint --initial_time 0 --final_time 15 --ar_steps 3`
+显式运行；它按样本加权、从输入恢复掩码通道，且不向模型传递标签。
+在该模式下，`--num_trajectories` 才表示 held-out 轨迹前缀。
 
 ## 方法和范围
 
@@ -135,9 +143,13 @@ TQDM_DISABLE=1 python -u -m SAPQ.sapq --config configs/sapq/default.json --model
 完整模型文件使用 Python/PyTorch 序列化，只加载可信来源的文件。
 成功后清理本次临时缓存；`--keep_work_dir` 可保留，失败时保留用于诊断。
 
-独立评估的 `L1`/`RelL1` 沿 ScOT：在归一化输出上计算，RelL1 的单位是百分数。
-物理 Sobolev 指标先反归一化，一阶差分除网格间距；不可压缩流另报告散度与涡量误差。
-结果 JSON 附指标定义。这与旧绘图脚本中未除网格间距的 Sobolev 数值不同，不能直接混表。
+默认评估使用 SAFE-SVD 的 `PDE_calc.py`：物理量反归一化后计算 0/1/2 阶 Sobolev、
+连续性、动量、涡量、H1，以及可压缩流/波动的时间项；按方程类型分派。
+网格间距固定 `dx=dy=1/128`，物理批次等权平均，JSON 按数据集名组织。
+`base_loss` 为 ScOT Trainer 返回的模型损失，不能当作 `RelL1` 百分数。
+`rel_*` 为无量纲比值；`compressed.increase` 为相对原模型的百分比变化。
+仅 `endpoint` 模式保留旧 `L1`/`RelL1`（RelL1 为百分数）和一阶物理指标。
+两种协议均记录在结果中，旧终点结果需要重新评估后才能与 SAFE-SVD 对比。
 
 ## 批量调度与旧入口
 

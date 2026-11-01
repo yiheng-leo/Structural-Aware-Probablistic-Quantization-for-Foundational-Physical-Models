@@ -253,7 +253,8 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     print(f"Saved {destination / 'compressed_model.pt'}", flush=True)
     print("Evaluate separately with: " + shlex.join([
         "python", "-m", "evaluation.evaluate", "--model_path", str(destination),
-        "--dataset", args.dataset, "--data_path", str(args.data_path), "--DEV", args.DEV]), flush=True)
+        "--dataset", args.dataset, "--data_path", str(args.data_path),
+        "--final_time", str(args.final_time), "--DEV", args.DEV]), flush=True)
     return destination, metadata
 
 

@@ -1,9 +1,7 @@
-"""Evaluate a saved quantized artifact without recalibration or its FP checkpoint.
+"""Evaluate Poseidon artifacts with SAFE-SVD's all-time-pairs physical protocol.
 
-Run with ``python -m evaluation.evaluate --model_path ... --dataset ...``.
-Reported L1/RelL1 follow scOT.metrics (normalized fields, sample mean, percent).
-Physical structure metrics use denormalized fields and unit-domain grid spacing.
-No target is passed to the model, including during autoregressive rollout.
+Use --checkpoint to also report the original model and percentage increases.
+The previous fixed-endpoint evaluator is available with --protocol endpoint.
 """
 from __future__ import annotations
 
@@ -107,30 +105,53 @@ def evaluate_model(model, loader, *, dataset, dataset_name, device, ar_steps=1):
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model_path", required=True)
+    parser.add_argument("--protocol", choices=("safe-svd", "endpoint"), default="safe-svd")
+    parser.add_argument("--model_path", "--model", dest="model_path",
+                        help="Saved quantization artifact directory or full model file.")
+    parser.add_argument("--checkpoint", help="Original fine-tuned checkpoint for baseline comparison.")
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--data_path", required=True)
-    parser.add_argument("--DEV", default="cpu")
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--data_path", "--data-root", dest="data_path", required=True)
+    parser.add_argument("--DEV", "--device", dest="DEV", default="cpu")
+    parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=256)
+    parser.add_argument("--physics_batch_size", "--physics-batch-size", dest="physics_batch_size",
+                        type=int, default=10)
+    parser.add_argument("--eval_obj", "--eval-obj", dest="eval_obj",
+                        choices=("ongt", "oncomp"), default="ongt")
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--split", choices=("val", "test"), default="test")
     parser.add_argument("--initial_time", type=int, default=0)
-    parser.add_argument("--final_time", type=int, default=14)
+    parser.add_argument("--final_time", "--final-time", dest="final_time", type=int, default=20)
     parser.add_argument("--ar_steps", type=int, default=1)
-    parser.add_argument("--num_trajectories", type=int, default=None,
-                        help="Omit to evaluate the complete split; otherwise use its deterministic prefix.")
-    parser.add_argument("--output_path", default=None)
+    parser.add_argument("--num_trajectories", "--num-trajectories", dest="num_trajectories", type=int,
+                        default=None, help="SAFE-SVD dataset argument (default 64, not a test prefix); "
+                        "in endpoint mode, optional held-out trajectory prefix.")
+    parser.add_argument("--output_path", "--output", dest="output_path", default=None)
     return parser
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.protocol == "safe-svd":
+        from evaluation.poseidon.evaluate import run
+        result = run(args)
+        serialized = json.dumps(_jsonable(result), indent=2, allow_nan=False)
+        if args.output_path:
+            output = Path(args.output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(serialized + "\n")
+        print(serialized)
+        return result
+    if not args.model_path:
+        parser.error("--protocol endpoint requires --model_path")
+    if args.checkpoint or args.eval_obj != "ongt":
+        parser.error("--checkpoint and --eval_obj oncomp require --protocol safe-svd")
     from quantization.artifacts import load_quantized_artifact
     model, artifact_meta = load_quantized_artifact(args.model_path, args.DEV)
     dataset, loader, selection = build_evaluation_loader(args)
     result = evaluate_model(model, loader, dataset=dataset, dataset_name=args.dataset,
                             device=args.DEV, ar_steps=args.ar_steps)
-    result.update(artifact=_jsonable(artifact_meta), evaluation=selection, metric_definitions={
+    result.update(protocol="endpoint", artifact=_jsonable(artifact_meta), evaluation=selection, metric_definitions={
         "L1": "Mean over samples of summed absolute error in normalized output channels.",
         "RelL1": "Mean per-sample relative L1, percent; all predicted output channels.",
         "sobolev_s01": "Denormalized mean absolute error plus first forward-difference errors; dx=1/W, dy=1/H.",

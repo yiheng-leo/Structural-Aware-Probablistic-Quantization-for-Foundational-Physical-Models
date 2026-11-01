@@ -56,10 +56,15 @@ QUANT_RUNNER=sbatch QUANT_PYTHON=/path/to/python bash scripts/quantize.sh
 ```bash
 sbatch scripts/slurm/quantize.sbatch sapq-block --config /path/to/config.json
 bash scripts/evaluate.sh --model_path /path/to/artifact \
-  --dataset fluids.incompressible.PiecewiseConstants --data_path /path/to/data
+  --checkpoint /path/to/original-checkpoint \
+  --dataset fluids.incompressible.PiecewiseConstants --data_path /path/to/data \
+  --final_time 20 --batch_size 256 --physics_batch_size 10 --DEV cuda
 ```
 
 Slurm 脚本接收方法名及全部 CLI 参数，再调用 `run_method.sh`。从其他目录提交时设置 `QUANT_REPO_ROOT` 为仓库绝对路径。矩阵提交会自动设置该变量，并把日志写入 `logs/quantization/`。GPU、时限等资源可以用 `sbatch` 参数覆盖。
+
+评估默认对齐 SAFE-SVD 的全部测试时间对和物理指标；checkpoint 可省略以单独评估产物。
+Wave-Gaussians 需 `--final_time 15`；旧终点/自回归方式须显式指定 `--protocol endpoint`。
 
 ## 历史入口与迁移记录
 

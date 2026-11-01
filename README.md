@@ -27,9 +27,10 @@ python -m SAPQ.sapq --config configs/sapq/default.json \
 
 python -m evaluation.evaluate \
   --model_path quantization_artifacts/NS-PwC/sapq \
+  --checkpoint /path/to/poseidon-checkpoint \
   --dataset fluids.incompressible.PiecewiseConstants \
   --data_path /path/to/down_streams --DEV cuda \
-  --initial_time 0 --final_time 15 --ar_steps 3 \
+  --final_time 20 --batch_size 256 --physics_batch_size 10 \
   --output_path quantization_evaluation/NS-PwC/sapq.json
 ```
 
@@ -40,6 +41,7 @@ StaticQ 在量化激活时才收集校准统计。所有正式产物目前为浮
 
 - [目录职责、旧入口迁移和兼容说明](docs/layout.md)
 - [校准协议、方法范围、保存格式及评估口径](quantization/README.md)
+- [与 SAFE-SVD 的方法差异及 Poseidon 评估对齐](docs/poseidon_evaluation.md)
 - [批量与 Slurm 调度](scripts/README.md)
 - [方法配置](configs/README.md)
 - [第三方原始源码与适配范围](reference/third_party/LAYOUT.md)

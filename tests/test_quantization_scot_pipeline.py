@@ -161,6 +161,17 @@ def test_all_methods_real_scot_export_fresh_load_and_evaluate(method, tiny_scot_
     assert evaluation["num_samples"] == 2
     assert all(torch.isfinite(torch.tensor(v)) for v in evaluation["metrics"].values())
 
+    # Every exported quantization route must support the default SAFE-SVD path,
+    # including ScOT's supervised loss/mask and the full physical metric set.
+    from types import SimpleNamespace
+    from evaluation.poseidon.evaluate import build_trainer, rollout as safe_rollout
+    from evaluation.poseidon.physics import evaluate_and_result
+    trainer = build_trainer(loaded, SimpleNamespace(DEV="cpu", batch_size=1))
+    physical = evaluate_and_result(trainer, dataset,
+                                   "fluids.incompressible.PiecewiseConstants", safe_rollout, 1)
+    for key in ("base_loss", "momentum", "h1_error", "sobolev_s012", "vorticity_err"):
+        assert torch.isfinite(torch.tensor(physical[key]))
+
     batch_path, output_path = tmp_path / "evaluation_input.pt", tmp_path / "fresh_output.pt"
     torch.save(sample, batch_path)
     root = Path(__file__).resolve().parents[1]

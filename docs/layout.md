@@ -38,8 +38,9 @@ raw/normalized、先验和敏感度指标均是参数，不再产生额外入口
 - `quantization/cache.py`、`observers.py`：磁盘校准快照和共用范围统计。
 - `quantization/probabilistic.py`：公共数学与 functional 权重原语，不包含方法分发和 epoch 循环。
 - `quantization/artifacts.py`、`compat.py`：模型保存与已知旧类路径的加载兼容。
-- `evaluation/evaluate.py`：独立评估入口、测试数据选择和汇总。
-- `evaluation/rollout.py`、`metrics.py`：AR 前向及指标。
+- `evaluation/evaluate.py`：独立评估入口，默认使用 SAFE-SVD 协议。
+- `evaluation/poseidon/`、`reporting.py`：全部测试时间对、ScOT Trainer、PDE 物理指标及原模型对照报告。
+- `evaluation/rollout.py`、`metrics.py`：显式 `--protocol endpoint` 的 AR 前向及指标。
 
 正式入口：
 
