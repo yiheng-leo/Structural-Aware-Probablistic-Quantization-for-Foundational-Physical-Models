@@ -91,6 +91,9 @@ def quantize(model, calibration_loader, args, device, work_dir):
     optimized. Returned weights are floating point fake-quantized values, not a
     packed integer representation. Inference needs no hooks or calibration files.
     """
+    if getattr(args, "origin", False):
+        from .origin import quantize as quantize_origin
+        return quantize_origin(model, calibration_loader, args, device, work_dir)
     if args.method not in {"sapq", "sapq-block", "sapq-layerwise", "sapq-network"}:
         raise ValueError(f"Unknown SAPQ method: {args.method}")
     _validate(args)

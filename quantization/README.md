@@ -1,12 +1,13 @@
 # Poseidon quantization：MySVD 校准协议
 
 本分支把 Poseidon 的量化流程统一成三个阶段：加载同一份校准集、执行量化、保存模型。
-评估由 `python -m evaluation.evaluate` 单独执行。生产入口不读取旧的 `/lus/...`
+评估由 `python -m evaluation.evaluate` 单独执行。默认生产入口不读取旧的 `/lus/...`
 范围、步长、Fisher 或校准 batch 缓存，也不在训练期间构造验证/测试集。
 
 校准策略移植自 `physic_model_comp/poseidon/MySVD/helper/calibration_dataset.py`
 及 `MySVD/mysvd.py`。参考代码仅用于阅读和对照测试，运行本仓库不依赖 MySVD。
 对应的 ScOT 数据集实现已经逐文件比较：时间索引和规范化逻辑一致。
+SAPQ 的 `--origin` 是显式例外，用于对照 main 原始实验设置与旧缓存。
 
 ## 校准集的精确定义
 
@@ -79,6 +80,69 @@ Wave-Gaussians 使用 `--final_time 15`。指标及方法差异见 [评估对齐
 原固定终点评估仍可通过 `--protocol endpoint --initial_time 0 --final_time 15 --ar_steps 3`
 显式运行；它按样本加权、从输入恢复掩码通道，且不向模型传递标签。
 在该模式下，`--num_trajectories` 才表示 held-out 轨迹前缀。
+
+## main 原实验：--origin
+
+在 ritchie 上运行 main/db1d702 的 `SAPQ/run_sapq_network_global.py` 默认实验设置：
+
+```bash
+python -u -m SAPQ.sapq --origin \
+  --model_path models/poseidon/fluids.incompressible.PiecewiseConstants \
+  --dataset fluids.incompressible.PiecewiseConstants \
+  --data_path poseidon/camlab-ethz/down_streams \
+  --DEV cuda --seed 0 \
+  --save_path quantization_artifacts/NS-PwC/sapq-origin
+```
+
+`--origin` 选择整个原实验配置，会覆盖 `--config` 和 CLI 中的实验参数，包括
+`--variant`、`--traj_num`、`--random_calibration`、`--final_time`、batch size、位宽、epoch、
+学习率、先验及敏感度设置；被替换的值会打印在日志里。模型/数据/输出路径、dataset、设备、
+seed、workers、overwrite/keep_work_dir 等运行参数继续生效。不加 `--origin` 则维持原行为。
+
+固定设置为：global；batch size=2；init=9、target=8、上限=20 bit；MC=5；最多 21 epoch；
+Adam lr=9.1e-4，沿 main 四段衰减；eta=1e-6；prior_scale=1e-4、sigma0=0.5、alpha=1；
+Sobolev 敏感度按块 min-max 归一化；至少完成 10 epoch 后，平均 bit < 4 时早停。
+使用 main 的原 stacked MC、labels/pixel_mask 前向约定、带加性 epsilon 的平均 bit 统计，
+以及 `torch.set_float32_matmul_precision("high")`。没有改用论文第 3.4 节的 Beta prior，
+也不是 main 的 `_raw` / `_all` 启动配置。
+
+旧文件默认从本仓库根目录寻找。`--origin_root /path/to/original-main-checkout` 可指定原仓库，
+或用下列参数直接指定可信的原文件：
+
+| 参数 | 默认寻找的位置 |
+| --- | --- |
+| `--origin_frozen_batches` | `ppq_artifacts/frozen_calibration_batches.pt` |
+| `--origin_sensitivity` | `SAPQ/prior_sensitivity_sobo/<model>/prior_sensitivity.pt` 的 `layer_sensitivity_norm` |
+| `--origin_ranges` | `precalculated_ranges/<model>/p1e-04/ranges.pt` |
+| `--origin_initial_steps` | `initial_step_sizes/<model>/p1e-04/9bit.pt` |
+| `--origin_layers` | `inspect_layers/L_quantize_layers.pt` 或 `.json` |
+
+`<model>` 优先用 checkpoint 目录名。NS-PwC 的 Poseidon-L 另兼容原 `NS-PwC-L` 名称。
+指定文件不存在会报错。已有 frozen batches 全部按原顺序使用，不按 512 批截断；
+main 的原启动器也是如此，实际数量由缓存决定。
+
+默认位置没有缓存时，会明确打印重建提示：校准加载 `num_trajectories=2048` 的训练数据，
+不传时间覆盖参数，保留 ScOT 原默认时间设置（普通时变任务为步长 2、0–14），
+从 shuffle=True 的 loader 取前 512 批、通常共 1,024 个样本。随后重算缺失的范围和敏感度；
+步长没有旧缓存则按 range/2^9 初始化。它不是取 16/64 条完整轨迹。
+
+metadata.json 记录有效配置、实际校准数量、旧文件路径及 SHA-256、实际完成 epoch 和早停状态。
+缺少原校准/敏感度缓存时，结果属于相同规则下的新实验，不能保证复现原来的随机样本和数值。
+`--seed` 控制当前运行的随机数；历史运行若没有记录 seed，仍无法由默认设置恢复其 RNG 状态。
+
+模型仍保存为可独立评估的 `compressed_model.pt`，例如：
+
+```bash
+python -m evaluation.evaluate \
+  --model_path quantization_artifacts/NS-PwC/sapq-origin/compressed_model.pt \
+  --checkpoint models/poseidon/fluids.incompressible.PiecewiseConstants \
+  --dataset fluids.incompressible.PiecewiseConstants \
+  --data_path poseidon/camlab-ethz/down_streams --DEV cuda \
+  --final_time 20 --batch_size 256 --physics_batch_size 10 \
+  --output_path quantization_evaluation/NS-PwC/sapq-origin.json
+```
+
+`--origin` 只切换量化实验；此处评估仍用已对齐的 SAFE-SVD 协议，便于与现有结果比较。
 
 ## 方法和范围
 
@@ -173,7 +237,7 @@ QUANT_RUNNER=sbatch QUANT_PYTHON=/path/to/python bash scripts/quantize.sh
 PPQ 的 `--variant` 为 global/layerwise；SAPQ 为 global/network/block/layerwise。
 raw/normalized、先验和敏感度类型均由配置指定，不再各建一个启动脚本。
 
-`--config configs/<method>/default.json` 加载 JSON，显式 CLI 参数优先；
+`--config configs/<method>/default.json` 加载 JSON，默认显式 CLI 参数优先；
 各模式也有对应模板。公共入口 `quantization.quantize` 和 `quantization.evaluate`
 只保留兼容转发；原方法的多份启动文件与旧 trainer 移入 `archive/legacy/`。
 `quantization.baselines` 只保留旧模型类名导出，不含第二套量化实现。

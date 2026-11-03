@@ -54,7 +54,8 @@ def _channel_sensitivity(grad):
     return grad.square().mean(dim=dims)
 
 
-def _sensitivity(model, units, layers, reference_steps, paths, device, args, constants):
+def _sensitivity(model, units, layers, reference_steps, paths, device, args, constants,
+                 *, forward_fn=forward_model):
     """One backward pass per batch captures every block, keeping only channel sums."""
     totals, counts = {}, {}
     for path in progress(paths, desc=f"SAPQ {args.sensitivity} sensitivity"):
@@ -70,7 +71,7 @@ def _sensitivity(model, units, layers, reference_steps, paths, device, args, con
                             raise ValueError(f"Repeated reconstruction unit {name!r} is unsupported.")
                         captured[name] = _first_tensor(output)
                     handles.append(unit.module.register_forward_hook(capture))
-                pred = forward_model(model, batch, device)
+                pred = forward_fn(model, batch, device)
             loss = _structure_loss(pred, record["clean"].to(device), args.sensitivity,
                                    constants, getattr(args, "dataset", ""))
             active = [(name, tensor) for name, tensor in captured.items() if tensor.requires_grad]

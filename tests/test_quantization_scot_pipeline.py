@@ -211,3 +211,34 @@ def test_sensitivity_reference_matches_legacy_poseidon_quantizer(tiny_scot_case)
             actual = forward_model(model, batch, "cpu")
     torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
     assert not any(module._forward_hooks for module in model.modules())
+
+
+def test_origin_route_real_scot_without_historical_caches(tiny_scot_case, tmp_path):
+    """Exercise regenerated sensitivity, original MC, export and inference."""
+    from quantization.runner import parse_args
+    from evaluation.poseidon.evaluate import build_trainer, rollout as safe_rollout
+    from evaluation.poseidon.physics import evaluate_and_result
+
+    model, dataset, loader, calibration_metadata = tiny_scot_case
+    _, args = parse_args([
+        "--origin", "--DEV", "cpu", "--model_path", str(tmp_path / "missing-original"),
+        "--save_path", str(tmp_path / "origin-artifact"), "--origin_root", str(tmp_path / "no-caches"),
+    ], default_method="sapq", family="sapq")
+    destination, metadata = run_quantization(
+        args, model=model, calibration_loader=loader, calibration_metadata=calibration_metadata)
+    details = metadata["quantization"]
+    assert details["origin"] is True
+    assert details["sensitivity_normalization"] == "normalized"
+    assert 10 <= details["epochs"] <= 21
+    if details["stopped_early"]:
+        assert details["avg_weight_bits"] < 4
+    assert all(value is None for value in details["origin_caches"].values())
+    state = torch.load(destination / "quantization_state.pt", map_location="cpu", weights_only=True)
+    assert state["sensitivity_raw"] and state["sensitivity_normalized"]
+    assert len(state["history"]) == details["epochs"]
+    for name, sensitivity in state["sensitivity"].items():
+        torch.testing.assert_close(sensitivity, state["sensitivity_normalized"][name])
+    loaded, _ = artifacts.load_quantized_artifact(destination, "cpu")
+    trainer = build_trainer(loaded, args)
+    physical = evaluate_and_result(trainer, dataset, "fluids.incompressible.PiecewiseConstants", safe_rollout, 1)
+    assert torch.isfinite(torch.tensor(physical["base_loss"]))

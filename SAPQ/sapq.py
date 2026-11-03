@@ -1,4 +1,4 @@
-"""Launch SAPQ; select its algorithm variant with --variant."""
+"""Launch SAPQ; use --variant for current modes or --origin for main's defaults."""
 from pathlib import Path
 import sys
 

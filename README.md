@@ -35,6 +35,9 @@ python -m evaluation.evaluate \
 ```
 
 命令行参数覆盖 JSON 配置。`configs/<method>/` 提供可修改的模板；真实模型和数据路径需要自行指定。
+SAPQ 可用 `python -u -m SAPQ.sapq --origin --model_path ... --data_path ... --save_path ...`
+切换到 main 原默认 global 实验；该模式固定原实验设置并优先复用旧缓存，详见
+[origin 使用说明](quantization/README.md#main-原实验--origin)。
 默认校准选择训练集前 64 条完整轨迹，支持固定 seed 的随机轨迹选择。
 Wave-Gaussians 使用 `--final_time 15`。Uniform、Dynamic 和 FP 不要求离线校准数据；
 StaticQ 在量化激活时才收集校准统计。所有正式产物目前为浮点 QDQ，不代表整数硬件加速。

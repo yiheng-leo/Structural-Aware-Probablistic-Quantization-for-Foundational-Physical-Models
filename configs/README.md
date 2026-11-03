@@ -9,6 +9,8 @@ python -m SAPQ.sapq --config configs/sapq/block.json \
 ```
 
 显式命令行参数覆盖 JSON 配置；未知参数、非整数轨迹数及跨方法配置会报错。
+SAPQ 显式使用 `--origin` 时改为 main 原默认 global 实验，固定实验参数覆盖 JSON/CLI，
+运行路径等参数保留；详见 [origin 说明](../quantization/README.md#main-原实验--origin)。
 只声明所需参数，其他参数由入口默认值提供。模型路径、数据路径和输出位置可用 CLI 覆盖。
 Wave-Gaussians 需额外设置 `--final_time 15`。
 

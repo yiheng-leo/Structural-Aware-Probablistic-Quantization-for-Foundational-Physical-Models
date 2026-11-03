@@ -42,6 +42,12 @@ def build_parser(default_method=None, defaults=None, *, family=None):
     parser.add_argument("--config", help="JSON configuration; explicit command-line options take precedence.")
     if family in VARIANTS:
         parser.add_argument("--variant", choices=tuple(VARIANTS[family]), default=None)
+    if family == "sapq":
+        parser.add_argument("--origin", action="store_true",
+                            help="Route to main's original global SAPQ experiment defaults.")
+        parser.add_argument("--origin_root", help="Original repository/cache root; defaults to this checkout.")
+        for option in ("frozen_batches", "sensitivity", "ranges", "initial_steps", "layers"):
+            parser.add_argument(f"--origin_{option}", help=f"Explicit original {option} file.")
     parser.add_argument("--model_name", default="Poseidon-L")
     parser.add_argument("--dataset", default=os.environ.get(
         "PPQ_DATASET_NAME", "fluids.incompressible.PiecewiseConstants"))
@@ -95,6 +101,9 @@ def build_parser(default_method=None, defaults=None, *, family=None):
 
 
 def validate_args(args):
+    if getattr(args, "origin", False):
+        from SAPQ.origin import apply_defaults
+        apply_defaults(args)
     if args.activation_bits is None:
         args.activation_bits = 8 if args.method == "repq" else 32
     if any(isinstance(value, float) and not math.isfinite(value) for value in vars(args).values()):
@@ -137,6 +146,9 @@ def validate_args(args):
             budget += f"_{args.prior_mode}_{args.sensitivity}_{args.sensitivity_normalization}"
         args.save_path = str(Path("quantization_artifacts") / args.model_name / args.dataset
                              / args.method / f"{tag}_{budget}_seed{args.seed}")
+        if getattr(args, "origin", False):
+            args.save_path = str(Path("quantization_artifacts") / args.model_name / args.dataset
+                                 / "sapq" / f"origin_main_seed{args.seed}")
     return args
 
 
@@ -201,7 +213,11 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
         args.method == "static" and args.activation_bits == 32)
     if calibration_loader is None and needs_calibration:
         progress_write("Preparing calibration dataset...")
-        _, calibration_loader, calibration_metadata = build_calibration_loader(args)
+        if getattr(args, "origin", False):
+            from SAPQ.origin import build_calibration_loader as build_origin_loader
+            _, calibration_loader, calibration_metadata = build_origin_loader(args)
+        else:
+            _, calibration_loader, calibration_metadata = build_calibration_loader(args)
     elif calibration_loader is not None and calibration_metadata is None:
         raise ValueError("Injected calibration_loader requires calibration_metadata")
     elif calibration_metadata is None:
@@ -251,10 +267,11 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
         elif work_dir.exists():
             print(f"Work files retained at {work_dir}", flush=True)
     print(f"Saved {destination / 'compressed_model.pt'}", flush=True)
+    evaluation_time = (15 if args.dataset == "wave.Gaussians" else 20) if getattr(args, "origin", False) else args.final_time
     print("Evaluate separately with: " + shlex.join([
         "python", "-m", "evaluation.evaluate", "--model_path", str(destination),
         "--dataset", args.dataset, "--data_path", str(args.data_path),
-        "--final_time", str(args.final_time), "--DEV", args.DEV]), flush=True)
+        "--final_time", str(evaluation_time), "--DEV", args.DEV]), flush=True)
     return destination, metadata
 
 
@@ -265,6 +282,7 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
     config_parser.add_argument("--config")
     config_parser.add_argument("--method")
     config_parser.add_argument("--variant")
+    config_parser.add_argument("--origin", action="store_true")
     explicit = config_parser.parse_known_args(argv)[0]
     config_path = explicit.config
     values = {}
@@ -294,6 +312,13 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
                 actions["method"].required = False
         except (OSError, ValueError, TypeError) as error:
             parser.error(str(error))
+    if family == "sapq" and (explicit.origin or values.get("origin", False)):
+        for key, value in {
+            "model_path": os.environ.get("PPQ_MODEL_PATH", "models/NS-PwC-L"),
+            "data_path": os.environ.get("PPQ_DATA_PATH", "dataset/NS-PwC"),
+        }.items():
+            if key not in values and key not in (defaults or {}):
+                parser.set_defaults(**{key: value})
     args = parser.parse_args(argv)
     allowed = set(VARIANTS[family].values()) if family in VARIANTS else {family}
     if family is not None and args.method not in allowed:
@@ -311,6 +336,9 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
             args.method = variant_method
     if family in VARIANTS:
         args.variant = next(key for key, method in VARIANTS[family].items() if method == args.method)
+    if getattr(args, "origin", False):
+        from SAPQ.origin import apply_defaults
+        apply_defaults(args)
     return parser, args
 
 
