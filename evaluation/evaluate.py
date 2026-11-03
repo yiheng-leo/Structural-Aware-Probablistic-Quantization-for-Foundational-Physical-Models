@@ -148,18 +148,12 @@ def main(argv=None):
         parser.error("--checkpoint and --eval_obj oncomp require --protocol safe-svd")
     from quantization.artifacts import load_quantized_artifact
     model, artifact_meta = load_quantized_artifact(args.model_path, args.DEV)
-    dataset, loader, selection = build_evaluation_loader(args)
+    dataset, loader, _ = build_evaluation_loader(args)
     result = evaluate_model(model, loader, dataset=dataset, dataset_name=args.dataset,
                             device=args.DEV, ar_steps=args.ar_steps)
-    result.update(protocol="endpoint", artifact=_jsonable(artifact_meta), evaluation=selection, metric_definitions={
-        "L1": "Mean over samples of summed absolute error in normalized output channels.",
-        "RelL1": "Mean per-sample relative L1, percent; all predicted output channels.",
-        "sobolev_s01": "Denormalized mean absolute error plus first forward-difference errors; dx=1/W, dy=1/H.",
-        "continuity": "Mean absolute central-difference velocity divergence, NS only.",
-        "vorticity": "Mean absolute curl error relative to ground truth, NS only.",
-        "relative_structure_metrics": "Dimensionless ratios, not percentages.",
-        "rollout": "Endpoint only; predicted states feed subsequent steps; masked channels copied from input.",
-    })
+    from evaluation.reporting import build_results, final_average_weight_bits
+    result = build_results(avg_weight_bits=final_average_weight_bits(artifact_meta),
+                           compressed_metrics=result["metrics"])
     serialized = json.dumps(result, indent=2, allow_nan=False)
     if args.output_path:
         output = Path(args.output_path)

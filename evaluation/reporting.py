@@ -1,60 +1,64 @@
-"""Shared Poseidon-style JSON records, grouped by dataset name."""
-
+"""Compact evaluation reports: final weight bits, metric values and changes."""
 from __future__ import annotations
 
-from collections.abc import Mapping
-from pathlib import Path
-from typing import Any
+import math
+from numbers import Real
+from typing import Any, Mapping
+
+
+# Bookkeeping entries returned by the SAFE-SVD calculator are not error metrics.
+_EXCLUDED_METRICS = {"model_size", "linear_size", "rel_base_loss"}
+
+
+def final_average_weight_bits(artifact_metadata: Mapping[str, Any]) -> float | None:
+    """Read achieved bits for quantized weights, never the requested bit budget.
+
+    PPQ/SAPQ save their parameter-weighted final mean in avg_weight_bits.
+    Fixed-bit baselines save weight_bits. Materialized QDQ tensors alone cannot
+    identify the original quantizer, so missing metadata yields null.
+    """
+    quantization = artifact_metadata.get("quantization", {})
+    for key in ("avg_weight_bits", "effective_bits", "weight_bits"):
+        value = quantization.get(key)
+        if isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value):
+            return float(value)
+    return None
+
+
+def _metric_values(metrics: Mapping[str, Any]) -> dict[str, float]:
+    return {
+        key: float(value)
+        for key, value in metrics.items()
+        if key not in _EXCLUDED_METRICS and isinstance(value, Real) and not isinstance(value, bool)
+    }
 
 
 def get_metric_increases(
     metrics: Mapping[str, Any], origin_metrics: Mapping[str, Any],
-) -> dict[str, float]:
-    """Use Poseidon's percentage change rule for error metrics only."""
-    excluded = {"model_size", "linear_size"}
+) -> dict[str, float | None]:
+    """Percent change from origin; a zero baseline has no defined percentage."""
+    origin = _metric_values(origin_metrics)
     return {
-        key: round(100.0 * (float(value) - float(origin_metrics[key])) / float(origin_metrics[key]), 6)
-        for key, value in metrics.items()
-        if key in origin_metrics
-        and key not in excluded
-        and isinstance(value, (int, float))
-        and isinstance(origin_metrics[key], (int, float))
-        and float(origin_metrics[key]) != 0.0
+        key: round(100.0 * (value - origin[key]) / origin[key], 6) if origin[key] != 0 else None
+        for key, value in _metric_values(metrics).items() if key in origin
     }
 
 
-def build_dataset_results(
-    origin_model: Path,
-    origin_metrics: Mapping[str, Mapping[str, Any]],
-    *,
-    compressed_model: Path | None = None,
-    compressed_metrics: Mapping[str, Mapping[str, Any]] | None = None,
-    metadata: Mapping[str, Any] | None = None,
-    dataset_metadata: Mapping[str, Mapping[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Wrap each flat metric dictionary in the same per-dataset record.
-
-    Metadata describes the evaluation protocol and sample counts; it never
-    participates in metric increases. Baseline-only runs omit ``compressed``.
-    """
-    if (compressed_model is None) != (compressed_metrics is None):
-        raise ValueError("compressed_model and compressed_metrics must be supplied together")
-    if compressed_metrics is not None and origin_metrics.keys() != compressed_metrics.keys():
-        raise ValueError("Original and compressed results must contain the same datasets")
-
-    results = {}
-    for dataset, metrics in origin_metrics.items():
-        record = {**(metadata or {}), **(dataset_metadata or {}).get(dataset, {})}
-        record.update({
-            "dataset": dataset,
-            "origin": {"model": str(origin_model), "metrics": dict(metrics)},
-        })
-        if compressed_metrics is not None:
-            compressed = compressed_metrics[dataset]
-            record["compressed"] = {
-                "model": str(compressed_model),
-                "metrics": dict(compressed),
-                "increase": get_metric_increases(compressed, metrics),
-            }
-        results[dataset] = record
-    return results
+def build_results(*, avg_weight_bits: float | None,
+                  origin_metrics: Mapping[str, Any] | None = None,
+                  compressed_metrics: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Keep only the requested final mean bits and one record per metric."""
+    origin = _metric_values(origin_metrics or {})
+    compressed = _metric_values(compressed_metrics or {})
+    increases = get_metric_increases(compressed, origin)
+    metrics = {}
+    for key in dict.fromkeys([*origin, *compressed]):
+        values = {}
+        if key in origin:
+            values["origin"] = origin[key]
+        if key in compressed:
+            values["compressed"] = compressed[key]
+        if key in increases:
+            values["change_percent"] = increases[key]
+        metrics[key] = values
+    return {"avg_weight_bits": avg_weight_bits, "metrics": metrics}

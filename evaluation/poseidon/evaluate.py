@@ -5,13 +5,10 @@ aggregation follow SAFE-SVD-v0/evaluation/poseidon. No quantization is run here.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import torch
 from torch.utils.data import Dataset
 
-from evaluation.reporting import build_dataset_results
-from quantization.calibration import dataset_metadata, _fingerprint
+from evaluation.reporting import build_results, final_average_weight_bits
 from .physics import evaluate_and_result
 
 
@@ -101,17 +98,6 @@ def run(args):
     test_ds = build_test_dataset(get_dataset, args)
     if not len(test_ds):
         raise ValueError("Evaluation dataset is empty.")
-    # Record the real held-out count: ScOT num_trajectories is training capacity.
-    samples_per_trajectory = int(getattr(test_ds, "multiplier", 1))
-    selection = {
-        "schema": "safe-svd-poseidon-evaluation-v1", "split": "test",
-        "num_samples": len(test_ds),
-        "num_test_trajectories": len(test_ds) // samples_per_trajectory,
-        "samples_per_trajectory": samples_per_trajectory,
-        "time_pairs": getattr(test_ds, "time_indices", None),
-        "source": dataset_metadata(test_ds),
-    }
-    selection["fingerprint"] = _fingerprint(selection)
     origin_metrics = None
     if args.checkpoint:
         from scOT.model import ScOT
@@ -137,36 +123,10 @@ def run(args):
         compressed_metrics = evaluate_and_result(
             trainer, test_ds, args.dataset, rollout, args.physics_batch_size)
 
-    metadata = {
-        "protocol": "safe-svd", "eval_obj": args.eval_obj,
-        "num_trajectories": 64 if args.num_trajectories is None else args.num_trajectories,
-        "final_time": args.final_time, "batch_size": args.batch_size,
-        "physics_batch_size": args.physics_batch_size,
-        "evaluation": selection,
-        "metric_definitions": {
-            "base_loss": "ScOT Trainer _loss, using the saved model config; not RelL1 percent.",
-            "physics": "SAFE-SVD-v0 PDE_calc: denormalized, dx=dy=1/128, Re=2500; "
-                       "compressible dt=1/20, wave dt=1/15.",
-            "aggregation": "Unweighted mean over physical batches, including the final partial batch.",
-            "relative": "rel_* are ratios; compressed.increase is percent change from origin.",
-            "prediction": "Direct inference on every test time pair (including t1=t2); "
-                          "ScOT labels/pixel_mask conventions; previous-time pass for wave/compressible.",
-        },
-    }
-    if args.model_path:
-        metadata["artifact"] = artifact_metadata
-    if origin_metrics is not None:
-        return build_dataset_results(
-            Path(args.checkpoint), {args.dataset: origin_metrics},
-            compressed_model=Path(args.model_path) if args.model_path else None,
-            compressed_metrics={args.dataset: compressed_metrics} if args.model_path else None,
-            metadata=metadata,
-        )
-    # Standalone compressed models do not require the original checkpoint.
-    return {args.dataset: {
-        **metadata, "dataset": args.dataset,
-        "compressed": {"model": str(args.model_path), "metrics": compressed_metrics},
-    }}
+    return build_results(
+        avg_weight_bits=final_average_weight_bits(artifact_metadata) if args.model_path else 32.0,
+        origin_metrics=origin_metrics, compressed_metrics=compressed_metrics,
+    )
 
 
 if __name__ == "__main__":

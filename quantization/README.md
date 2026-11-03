@@ -145,11 +145,16 @@ TQDM_DISABLE=1 python -u -m SAPQ.sapq --config configs/sapq/default.json --model
 
 默认评估使用 SAFE-SVD 的 `PDE_calc.py`：物理量反归一化后计算 0/1/2 阶 Sobolev、
 连续性、动量、涡量、H1，以及可压缩流/波动的时间项；按方程类型分派。
-网格间距固定 `dx=dy=1/128`，物理批次等权平均，JSON 按数据集名组织。
+网格间距固定 `dx=dy=1/128`，物理批次等权平均。
 `base_loss` 为 ScOT Trainer 返回的模型损失，不能当作 `RelL1` 百分数。
-`rel_*` 为无量纲比值；`compressed.increase` 为相对原模型的百分比变化。
+结果 JSON 仅包含 `avg_weight_bits` 和 `metrics`。每项指标保留 `origin`、`compressed`
+及 `change_percent`（相对原模型的百分比变化）；`rel_*` 指标本身仍为无量纲比值。
+不输出模型路径、参数、校准元数据、时间对、指纹、说明或模型大小等辅助信息。
+平均 bit 优先读取 PPQ/SAPQ 的最终参数量加权 `avg_weight_bits`，固定位宽方法读取
+`weight_bits`；缺少实际统计时为 `null`，不使用 target_bits 冒充最终结果。
+原模型指标为 0 时 `change_percent` 为 `null`；未提供 checkpoint 时只保留 compressed 数值。
 仅 `endpoint` 模式保留旧 `L1`/`RelL1`（RelL1 为百分数）和一阶物理指标。
-两种协议均记录在结果中，旧终点结果需要重新评估后才能与 SAFE-SVD 对比。
+两种协议均使用精简输出；旧终点结果需要重新评估后才能与 SAFE-SVD 对比。
 
 ## 批量调度与旧入口
 

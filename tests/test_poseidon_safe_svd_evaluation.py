@@ -180,6 +180,13 @@ def test_saved_real_scot_baseline_and_artifact_end_to_end(tmp_path, monkeypatch,
     model.save_pretrained(checkpoint)
     artifact = tmp_path / "compressed_model.pt"
     torch.save(model, artifact)
+    # Large artifact metadata must not leak into the evaluation report; use the
+    # achieved mean bits rather than initial/target bits.
+    (tmp_path / "metadata.json").write_text(json.dumps({
+        "quantization": {"avg_weight_bits": 4.25, "target_bits": 4, "initial_bits": 8},
+        "calibration": {"time_pairs": [[i, j] for i in range(21) for j in range(i, 21)]},
+        "args": {"target_bits": 4},
+    }))
     output = tmp_path / "metrics.json"
     previous_threads = torch.get_num_threads()
     torch.set_num_threads(1)
@@ -191,22 +198,25 @@ def test_saved_real_scot_baseline_and_artifact_end_to_end(tmp_path, monkeypatch,
             "--batch-size", "5", "--physics-batch-size", "5", "--eval-obj", eval_obj,
             "--output", str(output),
         ])
-        record = result["fluids.incompressible.PiecewiseConstants"]
-        assert record["evaluation"]["num_samples"] == 12
-        assert record["evaluation"]["num_test_trajectories"] == 2
-        assert record["origin"]["metrics"] == record["compressed"]["metrics"]
-        assert set(record["compressed"]["increase"].values()) <= {0.0}
-        assert "L1" not in record["compressed"]["metrics"]
-        assert record["compressed"]["metrics"]["base_loss"] >= 0
+        assert set(result) == {"avg_weight_bits", "metrics"}
+        assert result["avg_weight_bits"] == 4.25
+        assert "L1" not in result["metrics"]
+        assert not {"model_size", "linear_size", "rel_base_loss"} & result["metrics"].keys()
+        for metric in result["metrics"].values():
+            assert set(metric) == {"origin", "compressed", "change_percent"}
+            assert metric["origin"] == metric["compressed"]
+            assert metric["change_percent"] == (0.0 if metric["origin"] != 0 else None)
+        assert result["metrics"]["base_loss"]["compressed"] >= 0
         if eval_obj == "oncomp":
-            assert record["compressed"]["metrics"]["base_loss"] == 0
-        assert json.loads(output.read_text())[record["dataset"]]["protocol"] == "safe-svd"
+            assert result["metrics"]["base_loss"]["compressed"] == 0
+        assert json.loads(output.read_text()) == result
+        assert len(output.read_text().splitlines()) < 150
         # The same artifact is also evaluable without the original checkpoint.
         if eval_obj == "ongt":
             standalone = evaluate.run(args("--model_path", str(artifact), "--final_time", "2",
                                            "--batch_size", "5", "--physics_batch_size", "5"))
-            compressed = standalone[record["dataset"]]
-            assert "origin" not in compressed and "increase" not in compressed["compressed"]
-            assert compressed["compressed"]["metrics"] == record["compressed"]["metrics"]
+            assert standalone["avg_weight_bits"] == 4.25
+            for key, metric in standalone["metrics"].items():
+                assert metric == {"compressed": result["metrics"][key]["compressed"]}
     finally:
         torch.set_num_threads(previous_threads)
