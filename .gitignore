@@ -108,6 +108,7 @@ brecq_artifacts/
 ppq_experiments/
 sapq_experiments/
 zzzz_plot/
+ppq_artifacts/
 
 # Generated result files
 *_results.json
