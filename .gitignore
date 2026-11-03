@@ -88,6 +88,9 @@ setting_environment/Miniconda3-latest-Linux-aarch64.sh
 PDEBench/
 VICON/
 external_repos/
+poseidon/
+quantization_artifacts/
+quantization_evaluation/
 
 # SAPQ artifacts (VERY important)
 SAPQ/artifacts/

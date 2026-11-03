@@ -9,8 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from PPQ.noise import add_quantization_noise
-from BRECQ.quant.quant_layer import QuantModule
-from BRECQ.quant.poseidon_data_utils import get_model_output_tensor
+def get_model_output_tensor(x):
+    return x.output if hasattr(x, "output") else x[0] if isinstance(x, (tuple, list)) else x
 
 
 # ---------------------------------------------------------------------
@@ -48,6 +48,7 @@ def _get_weight_steps(step_entry):
 
 
 def _named_quantmodules(block) -> dict[str, QuantModule]:
+    from BRECQ.quant.quant_layer import QuantModule
     return {
         name: module
         for name, module in block.named_modules()
