@@ -1,14 +1,16 @@
 """Original main/db1d702 global SAPQ experiment behind ``SAPQ.sapq --origin``.
 
 Defaults come from PPQ/config.py + SAPQ/run_sapq_network_global.py, rather
-than the separate *_raw or *_all experiments. Keep the stacked MC estimator,
+than the separate *_raw or *_all experiments. Keep the original MC estimator,
 label/mask forward, legacy bit statistic and early stopping of that trainer.
+Replay original RNG states to backpropagate one MC graph at a time.
 Reuse trusted original caches when present; report every regenerated input.
 """
 from __future__ import annotations
 
 from itertools import islice
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -230,16 +232,56 @@ def _average_bits(steps, ranges, layers):
     return total / sum(layer.weight.numel() for layer in layers.values())
 
 
-def _likelihood(model, batch, target, layers, steps, args, device):
-    """Original stacked MC graph and RNG consumption, without seed replay."""
-    scores = []
-    for _ in range(args.mc_samples):
-        with _weight_hooks(layers, steps, noisy=True):
-            pred = _forward(model, batch, device)
-        dims = tuple(range(1, pred.ndim))
-        scores.append(-(pred - target).square().mean(dim=dims) / (2 * args.eta))
-    return -(torch.stack(scores).logsumexp(0)
-             - torch.log(torch.tensor(float(args.mc_samples), device=device))).sum()
+def _rng_state(device):
+    state = {"cpu": torch.get_rng_state()}
+    if device.type == "cuda":
+        state["device"] = torch.cuda.get_rng_state(device)
+    elif device.type == "mps":
+        state["device"] = torch.mps.get_rng_state()
+    return state
+
+
+def _restore_rng(state, device):
+    torch.set_rng_state(state["cpu"])
+    if device.type == "cuda":
+        torch.cuda.set_rng_state(state["device"], device)
+    elif device.type == "mps":
+        torch.mps.set_rng_state(state["device"])
+
+
+def _backward_likelihood(forward, target, args, device):
+    """Original log-mean-exp value/gradient with one resident MC graph.
+
+    Preserve the sequential noise draws of main, rather than generating new
+    per-sample seeds. The no-grad pass obtains each sample's responsibility;
+    replaying its saved RNG state computes the same weighted energy gradient.
+    Restore the post-forward RNG state so the next optimizer update sees the
+    original random sequence too. The MC count and batch size stay unchanged.
+    """
+    states, scores = [], []
+    with torch.no_grad():
+        for _ in range(args.mc_samples):
+            states.append(_rng_state(device))
+            pred = forward()
+            dims = tuple(range(1, pred.ndim))
+            scores.append(-(pred - target).square().mean(dim=dims) / (2 * args.eta))
+            del pred
+        scores = torch.stack(scores)
+        probabilities = scores.softmax(0)
+        loss_value = -(scores.logsumexp(0)
+                       - torch.log(torch.tensor(float(args.mc_samples), device=device))).sum().item()
+    next_state = _rng_state(device)
+    try:
+        for index, state in enumerate(states):
+            _restore_rng(state, device)
+            pred = forward()
+            dims = tuple(range(1, pred.ndim))
+            energy = (pred - target).square().mean(dim=dims) / (2 * args.eta)
+            (probabilities[index] * energy).sum().backward()
+            del pred, energy
+    finally:
+        _restore_rng(next_state, device)
+    return loss_value
 
 
 def _optimize(model, layers, steps, ranges, sensitivity, paths, args, device):
@@ -253,16 +295,19 @@ def _optimize(model, layers, steps, ranges, sensitivity, paths, args, device):
         for path in progress(paths, desc=f"Origin epoch {epoch}/{args.epochs}", leave=False):
             record = _load(path)
             optimizer.zero_grad(set_to_none=True)
-            likelihood = _likelihood(model, record["batch"], record["clean"].to(device),
-                                     layers, steps, args, device)
+            def forward():
+                with _weight_hooks(layers, steps, noisy=True):
+                    return _forward(model, record["batch"], device)
+            likelihood = _backward_likelihood(forward, record["clean"].to(device), args, device)
             prior = _prior(steps, ranges, sensitivity, args)
-            loss = likelihood + prior
-            if not torch.isfinite(loss):
+            if not math.isfinite(likelihood) or not torch.isfinite(prior):
                 raise FloatingPointError("Non-finite original SAPQ objective.")
-            loss.backward()
+            prior.backward()
+            if any(step.grad is None or not torch.isfinite(step.grad).all() for step in steps.values()):
+                raise FloatingPointError("Missing or non-finite original SAPQ step gradients.")
             optimizer.step()
             _clamp(steps, ranges, args.bmax_bits)
-            totals["likelihood"] += float(likelihood.detach())
+            totals["likelihood"] += likelihood
             totals["prior"] += float(prior.detach())
         with torch.no_grad():
             bits = _average_bits(steps, ranges, layers)
@@ -285,6 +330,7 @@ def quantize(model, calibration_loader, args, device, work_dir):
     progress_write("[origin] Defaults: global, batch=2, 512 shuffled batches if no frozen cache, "
                    "normalized Sobolev sensitivity, init=9, target=8, MC=5, epochs<=21, "
                    "early stop after epoch 10 when average bits < 4.")
+    progress_write("[origin] MC backward: replay original RNG states, one sample graph at a time.")
     if args.origin_overrides:
         progress_write("[origin] Replaced config/CLI experiment settings: " + json.dumps(args.origin_overrides))
     flags = {name: param.requires_grad for name, param in model.named_parameters()}
@@ -331,7 +377,8 @@ def quantize(model, calibration_loader, args, device, work_dir):
                 "stopped_early": len(history) < args.epochs,
                 "calibration_samples": samples, "calibration_batches": len(paths),
                 "sensitivity_normalization": "normalized", "sensitivity": "sobolev",
-                "likelihood": "original_stacked_mc_log_mean_exp_output_mse",
+                "likelihood": "original_mc_log_mean_exp_output_mse",
+                "mc_backward": "single_graph_replay_original_rng_states",
                 "variance_convention": "sigma0^2 * (1 + alpha * sensitivity)^2",
                 "origin_caches": {key: {"path": str(path), "sha256": _file_hash(path)} if path else None
                                   for key, path in caches.items()},

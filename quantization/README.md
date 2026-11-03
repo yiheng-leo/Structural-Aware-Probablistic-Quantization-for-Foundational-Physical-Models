@@ -102,9 +102,15 @@ seed、workers、overwrite/keep_work_dir 等运行参数继续生效。不加 `-
 固定设置为：global；batch size=2；init=9、target=8、上限=20 bit；MC=5；最多 21 epoch；
 Adam lr=9.1e-4，沿 main 四段衰减；eta=1e-6；prior_scale=1e-4、sigma0=0.5、alpha=1；
 Sobolev 敏感度按块 min-max 归一化；至少完成 10 epoch 后，平均 bit < 4 时早停。
-使用 main 的原 stacked MC、labels/pixel_mask 前向约定、带加性 epsilon 的平均 bit 统计，
+使用 main 的原 MC 似然估计、labels/pixel_mask 前向约定、带加性 epsilon 的平均 bit 统计，
 以及 `torch.set_float32_matmul_precision("high")`。没有改用论文第 3.4 节的 Beta prior，
 也不是 main 的 `_raw` / `_all` 启动配置。
+
+MC 实现使用两遍前向：先不保存反向计算图，记录各样本的似然权重和原始 RNG 状态；
+再逐个恢复 RNG 状态、重算并反传，每次只保留一个样本的计算图。保持原版连续噪声抽样、
+MC=5 和 log-mean-exp 梯度，避免原 stacked MC 同时保留五份图造成的显存峰值。
+批次结束后恢复原随机序列的后续状态，后续优化更新仍使用同样的随机数。
+代价是多一遍 MC 前向；浮点累加顺序不同仍可能带来微小数值误差。
 
 旧文件默认从本仓库根目录寻找。`--origin_root /path/to/original-main-checkout` 可指定原仓库，
 或用下列参数直接指定可信的原文件：

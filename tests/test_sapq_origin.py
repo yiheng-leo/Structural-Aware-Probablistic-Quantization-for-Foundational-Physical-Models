@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import weakref
 
 import pytest
 import torch
@@ -144,6 +145,54 @@ def load_original_functions():
                                   *functions], type_ignores=[])
         exec(compile(ast.fix_missing_locations(module), str(directory / file), "exec"), namespace)
     return namespace
+
+
+@pytest.mark.parametrize("device_name", ["cpu", "cuda"])
+def test_mc_replay_preserves_gradients_noise_rng_and_one_live_graph(device_name):
+    if device_name == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable on this host.")
+    device = torch.device(device_name)
+    args = SimpleNamespace(mc_samples=5, eta=1e-3)
+    step = nn.Parameter(torch.tensor([0.1, 0.2], dtype=torch.float64, device=device))
+    target = torch.ones(2, 2, dtype=torch.float64, device=device)
+    pending, draws = [], {False: [], True: []}
+
+    def forward():
+        # No previous MC output with a grad graph may remain referenced.
+        if torch.is_grad_enabled():
+            assert all(reference() is None for reference in pending)
+        cpu_noise = torch.rand((), dtype=target.dtype)
+        output = target + (torch.rand_like(target) - 0.5 + cpu_noise.to(device)) * step
+        draws[torch.is_grad_enabled()].append(output.detach().clone())
+        if torch.is_grad_enabled():
+            pending.append(weakref.ref(output))
+        return output
+
+    torch.manual_seed(76)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(76)
+    before = origin._rng_state(device)
+    scores = []
+    for _ in range(args.mc_samples):
+        # Use the same random operations as forward(), without its live-graph check.
+        cpu_noise = torch.rand((), dtype=target.dtype)
+        pred = target + (torch.rand_like(target) - 0.5 + cpu_noise.to(device)) * step
+        scores.append(-(pred - target).square().mean(1) / (2 * args.eta))
+    expected = -(torch.stack(scores).logsumexp(0)
+                 - torch.log(torch.tensor(float(args.mc_samples), device=device))).sum()
+    after = origin._rng_state(device)
+    expected.backward()
+    gradient = step.grad.clone()
+    step.grad = None
+    origin._restore_rng(before, device)
+    actual = origin._backward_likelihood(forward, target, args, device)
+    assert actual == pytest.approx(expected.item(), rel=1e-12, abs=1e-12)
+    torch.testing.assert_close(step.grad, gradient, rtol=1e-12, atol=1e-12)
+    assert len(pending) == args.mc_samples
+    for original, replayed in zip(draws[False], draws[True]):
+        torch.testing.assert_close(original, replayed, rtol=0, atol=0)
+    for key, state in after.items():
+        assert torch.equal(origin._rng_state(device)[key], state)
 
 
 def test_origin_optimizer_matches_main_original_updates_and_stop_epoch(tmp_path):
