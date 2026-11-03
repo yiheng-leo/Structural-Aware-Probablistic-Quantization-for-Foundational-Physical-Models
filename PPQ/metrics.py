@@ -194,6 +194,7 @@ def evaluate_with_stepsizes(
     act_steps,
     layer_names,
     device: str = "cuda",
+    forward_batch_size: int | None = None,
 ):
     """
     Evaluate model with weight-only fake quantization.
@@ -203,9 +204,13 @@ def evaluate_with_stepsizes(
       - dynamic format: {layer_name: w_step_tensor}
 
     act_steps is kept only for API compatibility and is not used.
+    forward_batch_size bounds GPU inference batches. Predictions are reassembled
+    on CPU so sample selection and the original per-loader-batch means stay intact.
     """
     device = torch.device(device if torch.cuda.is_available() else "cpu")
     model = model.to(device).eval()
+    if forward_batch_size is not None and forward_batch_size < 1:
+        raise ValueError("forward_batch_size must be positive.")
 
     name2mod = dict(model.named_modules())
 
@@ -253,49 +258,46 @@ def evaluate_with_stepsizes(
                 )
             )
 
-    loader = val_loader() if callable(val_loader) else val_loader
-
     rel_l1_list = []
     abs_l1_list = []
     
     print(f"[DEBUG] number of quant hooks registered = {len(handles)}")
 
 
-    with torch.no_grad():
-        for batch in loader:
-            x = batch["pixel_values"].to(device)
-            t = batch.get("time", None)
-            pm = batch.get("pixel_mask", None)
-            y = batch.get("labels", None)
+    try:
+        loader = val_loader() if callable(val_loader) else val_loader
+        with torch.no_grad():
+            for batch in loader:
+                labels = batch.get("labels")
+                if labels is None:
+                    continue
+                batch_size = len(batch["pixel_values"])
+                chunk_size = forward_batch_size or batch_size
+                predictions = []
+                for start in range(0, batch_size, chunk_size):
+                    def chunk(key):
+                        value = batch.get(key)
+                        if value is None:
+                            return None
+                        return value[start:start + chunk_size].to(device)
 
-            if t is not None:
-                t = t.to(device)
-            if pm is not None:
-                pm = pm.to(device)
-            if y is not None:
-                y = y.to(device)
-            else:
-                continue
-
-            outputs = model(
-                pixel_values=x,
-                time=t,
-                pixel_mask=pm,
-                labels=y,
-            )
-            pred = outputs.output
-
-            pred_np = pred.detach().cpu().numpy()
-            y_np = y.detach().cpu().numpy()
-
-            batch_rel = relative_lp_error(pred_np, y_np, p=1, return_percent=True)
-            batch_abs = lp_error(pred_np, y_np, p=1)
-
-            rel_l1_list.append(float(np.mean(batch_rel)))
-            abs_l1_list.append(float(np.mean(batch_abs)))
-
-    for h in handles:
-        h.remove()
+                    outputs = model(
+                        pixel_values=chunk("pixel_values"),
+                        time=chunk("time"),
+                        pixel_mask=chunk("pixel_mask"),
+                        labels=chunk("labels"),
+                    )
+                    predictions.append(outputs.output.detach().cpu().numpy())
+                    del outputs
+                pred_np = np.concatenate(predictions, axis=0)
+                y_np = labels.detach().cpu().numpy()
+                batch_rel = relative_lp_error(pred_np, y_np, p=1, return_percent=True)
+                batch_abs = lp_error(pred_np, y_np, p=1)
+                rel_l1_list.append(float(np.mean(batch_rel)))
+                abs_l1_list.append(float(np.mean(batch_abs)))
+    finally:
+        for handle in handles:
+            handle.remove()
 
     if len(rel_l1_list) == 0:
         return {"l1": float("nan"), "rel_l1": float("nan")}

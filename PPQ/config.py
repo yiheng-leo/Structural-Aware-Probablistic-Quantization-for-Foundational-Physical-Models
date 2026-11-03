@@ -73,6 +73,8 @@ class PPQConfig:
     calib_steps: int = 512 #256 #512 #128  #64
     val_batchsize: int = 512
     val_steps: int = 2
+    # Split each validation batch without changing its samples or aggregation.
+    eval_forward_batchsize: int = 8
 
     # -------------------------#
     # PPQ optimization
@@ -137,6 +139,10 @@ class PPQConfig:
         self.model_path = os.environ.get("PPQ_MODEL_PATH", self.model_path)
         self.data_path = os.environ.get("PPQ_DATA_PATH", self.data_path)
         self.dataset_name = os.environ.get("PPQ_DATASET_NAME", self.dataset_name)
+        self.eval_forward_batchsize = int(os.environ.get(
+            "PPQ_EVAL_FORWARD_BATCHSIZE", self.eval_forward_batchsize))
+        if self.eval_forward_batchsize < 1:
+            raise ValueError("PPQ_EVAL_FORWARD_BATCHSIZE must be positive.")
 
         self.inspect_dir = self.project_root / "inspect_layers"
         self.artifacts_root = self.project_root / "ppq_artifacts"

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import copy
 import os
 
 import torch
@@ -293,7 +292,7 @@ def main():
 
     print("Creating SAPQTrainerGlobal...")
     trainer = SAPQTrainerGlobal(
-        model=copy.deepcopy(model),
+        model=model,
         config=cfg,
         layer_names=candidate_layers,
         device=str(device),
@@ -309,6 +308,7 @@ def main():
             act_steps=None,
             layer_names=candidate_layers,
             device=device,
+            forward_batch_size=cfg.eval_forward_batchsize,
         )
 
         print(
@@ -334,6 +334,7 @@ def main():
         act_steps=None,
         layer_names=candidate_layers,
         device=device,
+        forward_batch_size=cfg.eval_forward_batchsize,
     )
 
     sapq_global_metrics = evaluate_with_stepsizes(
@@ -343,6 +344,7 @@ def main():
         act_steps=None,
         layer_names=candidate_layers,
         device=device,
+        forward_batch_size=cfg.eval_forward_batchsize,
     )
 
     dyn4_metrics = evaluate_with_stepsizes(
@@ -352,6 +354,7 @@ def main():
         act_steps=None,
         layer_names=candidate_layers,
         device=device,
+        forward_batch_size=cfg.eval_forward_batchsize,
     )
     dyn8_metrics = evaluate_with_stepsizes(
         model=model,
@@ -360,6 +363,7 @@ def main():
         act_steps=None,
         layer_names=candidate_layers,
         device=device,
+        forward_batch_size=cfg.eval_forward_batchsize,
     )
     dyn16_metrics = evaluate_with_stepsizes(
         model=model,
@@ -368,6 +372,7 @@ def main():
         act_steps=None,
         layer_names=candidate_layers,
         device=device,
+        forward_batch_size=cfg.eval_forward_batchsize,
     )
 
     print("number of epochs:", cfg.num_epochs)

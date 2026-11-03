@@ -8,6 +8,8 @@ Find pretrained models and pretraining dataset in our collection on the [🤗 Hu
 
 ## Usage
 
+For the global SAPQ quantization entry points and GPU memory settings, see [SAPQ/README.md](SAPQ/README.md).
+
 ### Installation & Requirements
 
 To get all requirements and install the package, run (inside this folder), after getting this repository:

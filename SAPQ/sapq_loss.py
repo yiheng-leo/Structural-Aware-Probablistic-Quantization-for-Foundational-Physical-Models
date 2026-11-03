@@ -7,6 +7,7 @@ from typing import Mapping, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from PPQ.noise import add_quantization_noise
 def get_model_output_tensor(x):
@@ -350,6 +351,7 @@ def compute_mc_negative_loglikelihood_network_global(
     num_mc_samples: int = 10,
     eta: float = 1e-4,
     device: str | torch.device = "cuda",
+    memory_efficient: bool = False,
 ):
     """
     Global / network-wise SAPQ Monte Carlo negative log-likelihood.
@@ -361,6 +363,9 @@ def compute_mc_negative_loglikelihood_network_global(
     - whole model final output only
     - optimize all channel step sizes together
     - uses forward hooks on nn.Linear so gradient flows to w_step
+    - memory_efficient replays each MC sample during backward, preserving RNG
+      states and the original log-mean-exp objective, rather than retaining
+      its noisy weights and activations for every sample at once
     """
     if model is None:
         raise ValueError("model must not be None.")
@@ -397,9 +402,10 @@ def compute_mc_negative_loglikelihood_network_global(
     if len(target_layers) == 0:
         raise ValueError("No valid nn.Linear layers found in step_sizes_dict.")
 
-    score_list = []
+    weight_steps = tuple(_get_weight_steps(step_sizes_dict[name]).to(device)
+                         for name in target_layers)
 
-    for _ in range(num_mc_samples):
+    def sample_score(*steps):
         handles = []
 
         def make_noisy_linear_hook(w_step_tensor):
@@ -410,30 +416,25 @@ def compute_mc_negative_loglikelihood_network_global(
                 return F.linear(x_in, w_noisy, mod.bias)
             return hook
 
-        for lname in target_layers:
-            mod = name2module[lname]
-            step_entry = step_sizes_dict[lname]
-            w_step = _get_weight_steps(step_entry).to(device)
-
-            if w_step.numel() != mod.weight.size(0):
-                continue
-
-            handles.append(
-                mod.register_forward_hook(
-                    make_noisy_linear_hook(w_step)
+        try:
+            for lname, w_step in zip(target_layers, steps):
+                mod = name2module[lname]
+                if w_step.numel() != mod.weight.size(0):
+                    continue
+                handles.append(
+                    mod.register_forward_hook(make_noisy_linear_hook(w_step))
                 )
+            outputs = model(
+                pixel_values=x,
+                time=t,
+                pixel_mask=pm,
+                labels=y,
             )
-
-        outputs = model(
-            pixel_values=x,
-            time=t,
-            pixel_mask=pm,
-            labels=y,
-        )
+        finally:
+            # Checkpoint recomputation may stop partway through the forward.
+            for handle in handles:
+                handle.remove()
         y_noisy = get_model_output_tensor(outputs)
-
-        for h in handles:
-            h.remove()
 
         if y_noisy.shape != y_clean.shape:
             raise ValueError(
@@ -442,7 +443,15 @@ def compute_mc_negative_loglikelihood_network_global(
 
         reduce_dims = tuple(range(1, y_noisy.dim()))
         sqerr_per_sample = (y_noisy - y_clean).pow(2).mean(dim=reduce_dims) / (2.0 * eta)
-        score = -sqerr_per_sample
+        return -sqerr_per_sample
+
+    score_list = []
+    for _ in range(num_mc_samples):
+        if memory_efficient and torch.is_grad_enabled():
+            score = checkpoint(sample_score, *weight_steps, use_reentrant=False,
+                               preserve_rng_state=True)
+        else:
+            score = sample_score(*weight_steps)
         score_list.append(score)
 
     scores = torch.stack(score_list, dim=0)  # [M, B]
@@ -763,6 +772,7 @@ def compute_sapq_loss_with_prior_global(
     alpha: float = 1.0,
     prior_scale: float = 1.0,
     device: str | torch.device = "cuda",
+    memory_efficient: bool = False,
 ):
     """
     Global network-wise SAPQ objective:
@@ -781,6 +791,7 @@ def compute_sapq_loss_with_prior_global(
         num_mc_samples=num_mc_samples,
         eta=eta,
         device=device,
+        memory_efficient=memory_efficient,
     )
 
     prior_loss = compute_prior_by_mode(

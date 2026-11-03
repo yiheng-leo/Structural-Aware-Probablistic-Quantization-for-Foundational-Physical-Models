@@ -47,7 +47,10 @@ class SAPQTrainerGlobal:
         self.model = model
         self.config = config
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.model = self.model.to(self.device).eval()
+        self.model = self.model.to(self.device).eval().requires_grad_(False)
+        # SAPQ optimizes separate channel step sizes, never the FP weights.
+        for parameter in self.model.parameters():
+            parameter.grad = None
 
         self.layer_names = layer_names
         self.name2mod = dict(self.model.named_modules())
@@ -202,6 +205,7 @@ class SAPQTrainerGlobal:
             f"min_epochs={getattr(cfg, 'min_epochs', 10)}, "
             f"early_stop_bits={getattr(cfg, 'early_stop_bits', 4.0)}, "
             f"mc_samples={cfg.num_mc_samples}, eta={cfg.eta}, "
+            f"mc_backward=checkpoint_replay, "
             f"base_lr={cfg.base_lr}, updates_per_batch={cfg.updates_per_batch}, "
             f"target_bits={getattr(cfg, 'target_bits', cfg.init_bits)}, "
             f"sigma0={getattr(cfg, 'sigma0', 0.5)}, "
@@ -223,7 +227,7 @@ class SAPQTrainerGlobal:
 
             for batch_idx in range(num_batches):
                 for _ in range(cfg.updates_per_batch):
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
 
                     total_loss, like_loss, prior_loss = compute_sapq_loss_with_prior_global(
                         model=self.model,
@@ -241,6 +245,7 @@ class SAPQTrainerGlobal:
                         alpha=float(getattr(cfg, "alpha", 1.0)),
                         prior_scale=float(getattr(cfg, "prior_scale", 1.0)),
                         device=self.device,
+                        memory_efficient=True,
                     )
 
                     total_loss.backward()
