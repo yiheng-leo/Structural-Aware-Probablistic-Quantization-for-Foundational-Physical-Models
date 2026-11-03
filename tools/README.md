@@ -27,6 +27,25 @@ QUANT_PYTHON=/path/to/python bash tools/data/assemble_selected.sh
 
 先检查各实现中的数据路径、列表与所需 Hugging Face/W&B 登录状态。迁移没有下载数据、访问账号或改动 `dataset`、`models` 等现有绝对软链接。两个 selected shell 使用调用环境中的 Python；Slurm 提交请从仓库根目录执行，或设置 `QUANT_REPO_ROOT`。
 
+## 为 main 原版 global SAPQ 准备缓存
+
+`prepare_main_sapq.py` 是给 **main 原始代码** 使用的独立工具。将该脚本复制到服务器的 main 工作目录再执行；它不会切换分支。ritchie 的正式量化入口不依赖这些旧缓存。
+
+从 main 仓库根目录执行，以下环境变量语法适用于 tcsh/csh：
+
+```tcsh
+setenv PPQ_MODEL_PATH /cs/research/vecg/EasyPDE/model-store/poseidon/fluids.incompressible.PiecewiseConstants
+setenv PPQ_DATA_PATH poseidon/camlab-ethz/down_streams
+setenv PPQ_DATASET_NAME fluids.incompressible.PiecewiseConstants
+setenv SAPQ_PRIOR_MODE block_sens
+python -u tools/prepare_main_sapq.py --cache-root /cs/research/vecg/EasyPDE/sapq-input-cache --device cuda
+python -u -m SAPQ.run_sapq_network_global
+```
+
+该工具补齐层名 PT、固定校准批次及 Sobolev 敏感度。新校准集遵循 main 默认数据设置：训练轨迹容量 2048、shuffle、512 个 batch、每批 2 个样本；随机种子默认为 0，可用 `--seed` 指定。缺少历史缓存时，这是新抽取的 1024 个样本，不能恢复作者当年的具体抽样。`--frozen-only` 只准备层名及校准批次。
+
+新缓存目录放在 `--cache-root` 下，通过软链接提供 main 所需路径。已有可用目录及缓存会复用；失效的目录软链接会重建，链接原目标的数据不会删除。它同时提供 global 读取的顶层校准文件和旧生成器使用的 `<数据目录名>-calib/` 路径，解决两处路径不一致。敏感度沿用 main 的量化器、Sobolev 损失、梯度归约及归一化，只将逐块重复反向计算合并成每批一次梯度计算；不修改 SAPQ 优化配置。
+
 ## 结构检查与绘图
 
 `diagnostics/inspect_layers/inspect_layers.py` 及其保存的 B/L 层清单从原 `inspect_layers/` 整体迁入。脚本按新位置寻找仓库，默认检查 `models/NS-PwC-L`；更换模型时修改脚本中的配置。它是人工诊断工具，不是量化时必须读取的层缓存。
