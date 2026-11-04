@@ -20,3 +20,32 @@ python -m pytest tests/test_sapq_global_memory.py -q
 ```
 
 无 CUDA 时会跳过 CUDA 对照。完整 Poseidon-L 的峰值显存需在实际 GPU 上测量。
+
+## 导出到 ritchie 的统一 evaluation
+
+使用训练时同一份原始 checkpoint 和最终步长，在 main 根目录执行：
+
+```bash
+python -u -m SAPQ.export_main_artifact \
+  --step_path SAPQ/artifacts_global/fluids.incompressible.PiecewiseConstants/network_block_sens_sobo/sapq_global_step_sizes.pt \
+  --checkpoint models/poseidon/fluids.incompressible.PiecewiseConstants \
+  --save_path /cs/research/vecg/EasyPDE/quantization_artifacts/NS-PwC/sapq-main
+```
+
+`--checkpoint` 省略时采用步长文件中记录的原始模型路径。工具逐通道应用 `round(W/s)*s`，生成 `compressed_model.pt`、`quantization_state.pt` 和 `metadata.json`。这是以浮点张量保存的确定性量化权重，适合当前 evaluation；不做低 bit 整数打包，因此文件体积不会按有效位宽同比下降。
+
+平均 bit 从步长文件旁的 `sapq_global_history.json` 最后一个 epoch 读取，可用 `--history_path` 指定对应历史。缺失时记录为 null，不使用配置中的 target_bits 代替。必须使用同一次运行的步长与历史，以及原始、尚未量化的 checkpoint。导出工具拒绝覆盖已有非空目录。
+
+在 ritchie 工作目录中直接评估仓库外的导出产物：
+
+```bash
+python -m evaluation.evaluate \
+  --model_path /cs/research/vecg/EasyPDE/quantization_artifacts/NS-PwC/sapq-main \
+  --checkpoint models/poseidon/fluids.incompressible.PiecewiseConstants \
+  --dataset fluids.incompressible.PiecewiseConstants \
+  --data_path poseidon/camlab-ethz/down_streams --DEV cuda \
+  --final_time 20 --batch_size 8 --physics_batch_size 10 \
+  --output_path quantization_evaluation/NS-PwC/sapq-main.json
+```
+
+这里采用 ritchie 默认的 SAFE-SVD 测试协议，输出平均 bit、各指标的 origin/compressed 值与变化百分比。main 日志中的随机验证子集 L1 与这份统一测试结果使用不同评估设置。
